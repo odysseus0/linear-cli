@@ -764,7 +764,7 @@ Functions needed:
 2. `--key` flag (on `auth login` only)
 3. Credentials TOML (default workspace, or `--workspace` if specified)
 
-**Conflict detection:** If both `LINEAR_API_KEY` and `--workspace` are set, error with exit code 4. These are contradictory — env var bypasses the credential file entirely, so a workspace selection is meaningless.
+Standard precedence — highest source wins, no conflict errors.
 
 ---
 
@@ -805,7 +805,6 @@ Error scenarios and hints:
 | Ambiguous user: "al" | 4 | `matches: Alice (alice@co.com), Alan (alan@co.com)` |
 | Team not found: "FOO" | 3 | `available: POL, ENG` |
 | No team specified | 4 | `use --team or set default_team in config` |
-| LINEAR_API_KEY + --workspace both set | 4 | `use one or the other, not both` |
 
 The hint contains candidates from the failed resolution — no extra API call needed since the resolver already has them in scope.
 
