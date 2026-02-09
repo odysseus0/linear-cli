@@ -1,0 +1,27 @@
+{
+  "name": "@odysseus0/linctl",
+  "version": "0.1.0",
+  "exports": "./src/main.ts",
+  "tasks": {
+    "dev": "deno run --allow-all src/main.ts",
+    "compile": "deno compile --allow-all --output linctl src/main.ts",
+    "check": "deno check src/main.ts",
+    "test": "deno test --allow-all",
+    "fmt": "deno fmt",
+    "lint": "deno lint"
+  },
+  "imports": {
+    "@cliffy/command": "jsr:@cliffy/command@^1.0.0-rc.8",
+    "@cliffy/prompt": "jsr:@cliffy/prompt@^1.0.0-rc.8",
+    "@cliffy/table": "jsr:@cliffy/table@^1.0.0-rc.8",
+    "@cliffy/ansi": "jsr:@cliffy/ansi@^1.0.0-rc.8",
+    "@linear/sdk": "npm:@linear/sdk",
+    "@std/toml": "jsr:@std/toml",
+    "@std/fmt": "jsr:@std/fmt",
+    "@std/path": "jsr:@std/path",
+    "@std/fs": "jsr:@std/fs"
+  },
+  "fmt": {
+    "semiColons": false
+  }
+}
