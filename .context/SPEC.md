@@ -22,36 +22,7 @@ linear-cli is a Deno/TypeScript CLI for Linear built for AI agents managing work
 | Config | `@std/toml` | Deno stdlib TOML parsing. Global + project-level config |
 | Release | `deno compile` + GitHub releases | Cross-platform binaries, Homebrew tap |
 
-## Architecture
-
-```
-linear-cli/
-├── src/
-
-│   ├── main.ts                    # Entry point, Cliffy command tree
-│   ├── client.ts                  # LinearClient init (SDK + auth)
-│   ├── commands/                  # One file per entity
-│   │   ├── auth.ts                # auth login/logout/status/whoami
-│   │   ├── issue.ts               # issue list/create/view/update/delete + comment
-│   │   ├── team.ts                # team list/view/members/overview
-│   │   ├── project.ts             # project list/view/create
-│   │   └── cycle.ts               # cycle list/view
-│   ├── output/
-│   │   ├── formatter.ts           # Format dispatch (table vs compact)
-│   │   ├── table.ts               # Colored table output (Cliffy Table + ANSI)
-│   │   └── compact.ts             # Tab-delimited output for agents
-│   ├── config.ts                  # Config loading: flags → env → project → global → defaults
-│   ├── auth.ts                    # Credential read/write (TOML via @std/toml)
-│   └── resolve.ts                 # Name resolution (users, labels, projects)
-├── deno.json                      # Deno config, imports, tasks
-├── deno.lock
-├── CLAUDE.md                      # AI maintainer instructions
-├── SPEC.md                        # This file
-├── README.md
-└── LICENSE                        # MIT
-```
-
-### Design Principles
+## Design Principles
 
 1. **Commands return data, formatters render.** No `console.log` in command handlers. Commands populate a result struct, pass to `render()`.
 
@@ -156,40 +127,6 @@ team = "POL"
 
 ## Commands — Phase 1
 
-### `linear-cli` (root, no subcommand)
-
-Shows curated help with common commands and examples:
-
-```
-linear-cli — Agent-native Linear CLI
-
-Usage:
-  linear-cli [command]
-
-Common Commands:
-  issue list          List issues (all assignees, sorted by updated)
-  issue create        Create a new issue
-  issue view POL-5    View issue details
-  team overview       Team status dashboard
-
-All Commands:
-  auth                Manage authentication
-  issue               Manage issues
-  team                Manage teams
-  project             Manage projects
-  cycle               Manage cycles
-
-Flags:
-  -f, --format string   Output format: table, compact, json (default "table")
-  -t, --team string     Team key (default from config)
-  -h, --help            Show help
-  -v, --version         Show version
-
-Use "linear-cli [command] --help" for more information about a command.
-```
-
----
-
 ### `linear-cli auth login`
 
 Authenticate with Linear.
@@ -287,8 +224,6 @@ POL-6	Backlog	-	Test issue from MCP	1h
 POL-5	Backlog	-	Test issue from CLI	1h
 ```
 
-**SDK:** `client.issues({ filter: { team, state, assignee, labels }, first: 50, orderBy: PaginationOrderBy.UpdatedAt })`
-
 ---
 
 ### `linear-cli issue create`
@@ -311,10 +246,8 @@ Create a new issue.
 **Behavior:**
 1. Resolve team from `--team` flag or config
 2. If `--description` not set and stdin is not a TTY, read stdin as description
-3. Resolve assignee name to user ID via `resolve.ts`
-4. Resolve label names to label IDs via `resolve.ts`
-5. Create issue via `client.createIssue()`
-6. Print the created issue (using current format)
+3. Resolve assignee and label names to IDs (see Name Resolution)
+4. Create issue, print result in current format
 
 **Table output:**
 ```
@@ -379,8 +312,6 @@ url	https://linear.app/polytropos/issue/POL-5/test-issue-from-cli
 description	Comparing CLI vs MCP output
 ```
 
-**SDK:** `client.issue(id)` — returns full issue. Lazy-load relations: `await issue.assignee`, `await issue.project`, `await issue.comments()`. SDK handles all field selection.
-
 ---
 
 ### `linear-cli issue update <id>`
@@ -407,8 +338,7 @@ Update issue fields. Only specified flags are changed; unspecified fields are le
 **Behavior:**
 1. Resolve names to IDs (assignee, labels, project)
 2. For label operations: fetch current labels, compute delta, send full label ID list
-3. Call `client.updateIssue(id, input)` with changed fields only
-4. Print updated issue summary
+3. Update only changed fields, print updated issue summary
 
 **Output:** Same as `issue view` for the updated issue.
 
@@ -423,7 +353,7 @@ Delete an issue.
 **Behavior:**
 1. If stdin is a TTY, prompt: `Delete POL-5 "Test issue"? [y/N]`
 2. If stdin is not a TTY (agent use), delete without confirmation
-3. Call `client.archiveIssue(id)` (Linear doesn't truly delete, it archives)
+3. Archive the issue (Linear doesn't truly delete, it archives)
 
 **Output:** `Deleted POL-5: Test issue from CLI`
 
@@ -551,8 +481,6 @@ Bot-2	1	2	0	3
 Unassigned	3	0	0	0
 ```
 
-**SDK:** Fetch all issues via `client.issues({ filter: { team } })`, paginate with `fetchNext()`, group client-side by assignee and state type.
-
 ---
 
 ### `linear-cli project list`
@@ -667,132 +595,9 @@ Issues:
 
 ---
 
-## SDK Usage
-
-### Client: `src/client.ts`
-
-Initialize `LinearClient` from the SDK with the API key from auth. The SDK handles all GraphQL, null coercion, lazy fetching, and pagination internally.
-
-```typescript
-import { LinearClient } from "npm:@linear/sdk";
-
-export function createClient(apiKey: string): LinearClient {
-  return new LinearClient({ apiKey });
-}
-```
-
-Commands call SDK methods directly:
-- `client.issues({ filter, first: 50, orderBy: PaginationOrderBy.UpdatedAt })`
-- `client.createIssue({ teamId, title, ... })`
-- `client.issue(id)` — returns full issue with lazy-loaded relations
-
-The SDK's lazy fetching means `issue.assignee` returns a `LinearFetch<User>` that only hits the API when awaited. Use this for detail views; for list views, the eager scalar fields (identifier, title, priority, updatedAt) are already loaded.
-
-### What the SDK handles (so we don't have to)
-
-- **Null → undefined coercion** — SDK's custom codegen converts nullable fields to `undefined`, preventing the "explicit null breaks API" problem
-- **Lazy fetching** — nested objects (assignee, project, cycle) store only IDs; full data fetched on demand
-- **Relay pagination** — `connection.fetchNext()`, `connection.nodes`, `connection.pageInfo`
-- **Internal field filtering** — fields marked `[Internal]` or `[ALPHA]` excluded from SDK
-
----
-
-## Output System
-
-### `src/output/formatter.ts`
-
-```typescript
-type Format = "table" | "compact" | "json";
-
-interface TableData {
-  headers: string[];
-  rows: string[][];
-}
-
-interface DetailData {
-  title: string;
-  fields: { label: string; value: string }[];
-  sections?: { title: string; table: TableData }[];
-}
-
-function render(format: Format, data: TableData | DetailData): void;
-function renderJson(data: unknown): void; // JSON.stringify(data, null, 2)
-function renderMessage(format: Format, msg: string): void;
-```
-
-Commands return data structs, formatters render. No `console.log` in command handlers.
-
-### Table formatter (Cliffy Table + ANSI)
-
-- Headers: bold, cyan
-- Priority: `!!!` red, `!!` orange, `!` yellow, `---` dim
-- State colors: mapped from Linear's hex color for each state
-- Timestamps: relative ("5 min ago", "2 hours ago", "3 days ago")
-- Uses `@cliffy/table` for column alignment, `@cliffy/ansi` for colors
-
-### Compact formatter
-
-- Tab-delimited
-- First row: headers (uppercase)
-- No colors, no ANSI codes
-- Timestamps: abbreviated (`5m`, `2h`, `3d`)
-- Null/empty values: `-`
-
----
-
-## Auth System
-
-### `src/auth.ts`
-
-Credentials stored at `~/.config/linear/credentials.toml`:
-
-```toml
-default = "polytropos"
-polytropos = "lin_api_xxxxx"
-```
-
-Functions needed:
-- `loadCredentials(): Record<string, string> + default`
-- `saveCredentials(workspace: string, apiKey: string)`
-- `getAPIKey(workspace?: string): string` (uses default if workspace empty)
-- `removeCredentials(workspace: string)`
-- `credentialsPath(): string` (XDG-compliant)
-
-### Auth resolution order
-
-1. `LINEAR_API_KEY` environment variable
-2. `--key` flag (on `auth login` only)
-3. Credentials TOML (default workspace, or `--workspace` if specified)
-
-Standard precedence — highest source wins, no conflict errors.
-
----
-
 ## Error Handling
 
-One error class, one top-level catch. Cliffy handles CLI validation (missing flags, wrong types, unknown commands). We handle domain errors (not found, ambiguous, auth).
-
-```typescript
-class CliError extends Error {
-  constructor(message: string, public code = 1, public hint?: string) {
-    super(message)
-  }
-}
-```
-
-Top-level catch in `main.ts`:
-```typescript
-try {
-  await app.parse(Deno.args)
-} catch (e) {
-  if (e instanceof CliError) {
-    console.error(`error: ${e.message}`)
-    if (e.hint) console.error(`  try: ${e.hint}`)
-    Deno.exit(e.code)
-  }
-  throw e // let Cliffy's own errors bubble
-}
-```
+Cliffy handles CLI validation (missing flags, wrong types, unknown commands). We handle domain errors (not found, ambiguous, auth) with a single error type carrying an exit code and optional hint.
 
 Error scenarios and hints:
 
@@ -819,8 +624,6 @@ Several commands accept human-friendly names that must be resolved to Linear IDs
 - **Projects:** `--project "Auth System"` → fetch projects, find by name match, get ID
 - **Teams:** `--team POL` → the team key IS the identifier (no resolution needed)
 
-Resolution functions live in `src/resolve.ts`, separate from command logic. Uses SDK's `client.users()`, `client.issueLabels()`, `client.projects()` for lookups.
-
 Resolution strategy: exact match (case-insensitive) → substring match → error with candidates.
 
 If one substring match: use it (no ambiguity).
@@ -846,58 +649,3 @@ All commands that accept issue/project identifiers detect format by shape:
 - `550e8400-e29b-41d4-...` → UUID, pass directly to SDK
 - UUIDs accepted as input (for round-tripping from `--format json`) but never output in `table` or `compact` formats
 
----
-
-## Deno Tasks
-
-In `deno.json`. Use latest versions for all dependencies:
-
-- **Cliffy:** `@cliffy/command`, `@cliffy/table`, `@cliffy/ansi`, `@cliffy/prompt` from JSR
-- **Deno stdlib:** `@std/toml`, `@std/fs`, `@std/path` from JSR
-- **Linear SDK:** `npm:@linear/sdk`
-
----
-
-## Testing Strategy
-
-**Unit tests:** Output formatting (table and compact renderers). Given `TableData`, verify output string. No network calls. Uses `deno test`.
-
-**Integration tests:** Via `--integration` flag. Run against real Linear API (Polytropos workspace). Test happy path of each command. Use a `_test` label on created issues for cleanup.
-
-**Smoke test script:** `test/smoke.sh` that runs each command and checks exit code + output is non-empty.
-
----
-
-## Build Sequence
-
-Execute in this order. Each step validates the previous.
-
-1. **Init repo:** `deno init`, set up `deno.json` with imports (Cliffy, @linear/sdk, @std/toml)
-2. **Auth:** Implement `src/auth.ts` — read existing credentials.toml via @std/toml
-3. **Client:** Implement `src/client.ts` — LinearClient from SDK
-4. **Output:** Implement formatters — table (Cliffy Table) + compact
-5. **Root + Auth commands:** `src/main.ts` + `src/commands/auth.ts` — verify auth works
-6. **Team commands:** `src/commands/team.ts` — list, view, members. **First full stack validation.**
-7. **Issue commands:** `src/commands/issue.ts` — list, create, view, update, delete, comment
-8. **Project commands:** `src/commands/project.ts` — list, view, create
-9. **Cycle commands:** `src/commands/cycle.ts` — list, view
-10. **Team overview:** Add overview subcommand with aggregation logic
-11. **Name resolution:** `src/resolve.ts` — exact match → substring → ambiguity errors
-12. **Polish:** Help text, error messages, edge cases, shell completions
-13. **Compile + README**
-14. **Tests:** Unit tests for output, integration smoke tests
-
----
-
-## Release Setup
-
-### `deno compile`
-
-Produces standalone binaries per platform (embeds Deno runtime). Distribute via:
-- GitHub releases: binaries for darwin-arm64, darwin-x64, linux-x64
-- Homebrew: tap with prebuilt binaries from GitHub releases
-- JSR: `deno install` from JSR registry
-
-### GitHub Actions: `.github/workflows/release.yml`
-
-Trigger on tag push (`v*`). Runs `deno compile` for each target, creates GitHub release.
