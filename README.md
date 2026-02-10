@@ -1,19 +1,27 @@
-# linctl
+# linear-cli
 
-Agent-native Linear CLI. Designed for AI agents managing work — orchestrator-first defaults, token-efficient output, name resolution.
+Agent-native Linear CLI. Designed for AI agents managing work —
+orchestrator-first defaults, token-efficient output, name resolution.
 
 ## Why
 
-Linear's MCP server returns ~2000 tokens for 6 issues. The existing Deno CLI (`schpet/linear-cli`) defaults to `--assignee me`. Neither is designed for agents managing work.
+Linear's MCP server returns ~2000 tokens for 6 issues. The existing Deno CLI
+(`schpet/linear-cli`) defaults to `--assignee me`. Neither is designed for
+agents managing work.
 
-linctl uses Linear's official SDK for correctness (behavioral contract: null coercion, lazy fetching, pagination) and adds what agents need: compact output (~50 tokens for same 6 issues), orchestrator-first defaults, name resolution.
+linear-cli uses Linear's official SDK for correctness (behavioral contract: null
+coercion, lazy fetching, pagination) and adds what agents need: compact output
+(~50 tokens for same 6 issues), orchestrator-first defaults, name resolution.
 
 ## Install
 
 ```bash
+# Homebrew
+brew install odysseus0/tap/linear-cli
+
 # From source
 deno task compile
-cp linctl /usr/local/bin/
+cp linear /usr/local/bin/
 
 # Or run directly
 deno task dev -- <command>
@@ -23,21 +31,22 @@ deno task dev -- <command>
 
 ```bash
 # Authenticate
-linctl auth login --key lin_api_xxxxx
+linear auth login --key lin_api_xxxxx
 
 # List all active issues (all assignees, sorted by updated)
-linctl issue list
+linear issue list
 
 # Agent-friendly compact output
-linctl issue list --format compact
+linear issue list --format compact
 
 # Team overview — the orchestrator's primary command
-linctl team overview
+linear team overview
 ```
 
 ## Two Output Modes
 
 **Table** (default, human):
+
 ```
 ◌   ID     STATE    ASSIGNEE  TITLE                   UPDATED
 --- POL-6  Backlog  -         Test issue from MCP     1 min ago
@@ -45,6 +54,7 @@ linctl team overview
 ```
 
 **Compact** (agent, `--format compact`):
+
 ```
 ID	STATE	ASSIGNEE	TITLE	UPDATED
 POL-6	Backlog	-	Test issue from MCP	1m
@@ -53,7 +63,8 @@ POL-1	Todo	Alice	Implement auth module	2h
 
 ## Stack
 
-Deno / [Cliffy](https://cliffy.io) / [@linear/sdk](https://www.npmjs.com/package/@linear/sdk)
+Deno / [Cliffy](https://cliffy.io) /
+[@linear/sdk](https://www.npmjs.com/package/@linear/sdk)
 
 ## License
 

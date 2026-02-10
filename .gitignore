@@ -3,8 +3,10 @@
 node_modules/
 
 # Build output
-linctl
-linctl-*
+linear
+linear-*
+linear
+linear-*
 
 # OS
 .DS_Store
@@ -16,3 +18,6 @@ linctl-*
 # Environment
 .env
 .env.local
+
+# Test reports
+scenarios/report.md

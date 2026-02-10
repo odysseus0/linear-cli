@@ -1,10 +1,10 @@
 {
-  "name": "@odysseus0/linctl",
-  "version": "0.1.0",
+  "name": "@odysseus0/linear",
+  "version": "0.1.1",
   "exports": "./src/main.ts",
   "tasks": {
     "dev": "deno run --allow-all src/main.ts",
-    "compile": "deno compile --allow-all --output linctl src/main.ts",
+    "compile": "deno compile --allow-all --output linear src/main.ts",
     "check": "deno check src/main.ts",
     "test": "deno test --allow-all",
     "fmt": "deno fmt",
