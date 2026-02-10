@@ -1,6 +1,7 @@
 import { Command } from "@cliffy/command"
 import { PaginationOrderBy } from "@linear/sdk"
 import { createClient } from "../client.ts"
+import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
 import { getFormat } from "../types.ts"
 import type { GlobalOptions } from "../types.ts"
@@ -8,6 +9,7 @@ import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import {
   readStdin,
+  resolvePriority,
   requireTeam,
   resolveIssue,
   resolveLabel,
@@ -53,6 +55,10 @@ const listCommand = new Command()
   .option("-s, --state <state:string>", "State type filter", {
     collect: true,
   })
+  .option("--status <state:string>", "Alias for --state", {
+    collect: true,
+    hidden: true,
+  })
   .option("-a, --assignee <name:string>", "Filter by assignee")
   .option("-U, --unassigned", "Show only unassigned")
   .option("-l, --label <name:string>", "Filter by label", { collect: true })
@@ -73,9 +79,10 @@ const listCommand = new Command()
       team: { key: { eq: teamKey } },
     }
 
-    // State filter
-    const stateTypes = options.state?.length
-      ? options.state
+    // State filter (--status is hidden alias for --state)
+    const states = options.state ?? options.status
+    const stateTypes = states?.length
+      ? states
       : options.includeCompleted
       ? undefined
       : DEFAULT_ACTIVE_STATES
@@ -290,9 +297,10 @@ const createCommand = new Command()
   .option("-d, --description <desc:string>", "Description")
   .option("-a, --assignee <name:string>", "Assignee name or 'me'")
   .option("-s, --state <state:string>", "Initial state name")
+  .option("--status <state:string>", "Alias for --state", { hidden: true })
   .option(
-    "--priority <n:integer>",
-    "Priority: 1=urgent, 2=high, 3=medium, 4=low",
+    "--priority <priority:string>",
+    "Priority: urgent, high, medium, low, none (or 0-4)",
   )
   .option("-l, --label <name:string>", "Label name", { collect: true })
   .option("-p, --project <name:string>", "Project name")
@@ -314,13 +322,14 @@ const createCommand = new Command()
     }
 
     if (description) input.description = description
-    if (options.priority) input.priority = options.priority
+    if (options.priority) input.priority = resolvePriority(options.priority)
 
     if (options.assignee) {
       input.assigneeId = await resolveUser(client, options.assignee)
     }
-    if (options.state) {
-      input.stateId = await resolveState(client, teamId, options.state)
+    const stateName = options.state ?? options.status
+    if (stateName) {
+      input.stateId = await resolveState(client, teamId, stateName)
     }
     if (options.label?.length) {
       input.labelIds = await Promise.all(
@@ -364,7 +373,8 @@ const updateCommand = new Command()
   .option("-d, --description <desc:string>", "New description")
   .option("-a, --assignee <name:string>", "New assignee (empty to unassign)")
   .option("-s, --state <state:string>", "New state name")
-  .option("--priority <n:integer>", "New priority (1-4)")
+  .option("--status <state:string>", "Alias for --state", { hidden: true })
+  .option("--priority <priority:string>", "Priority: urgent, high, medium, low, none (or 0-4)")
   .option("-l, --label <name:string>", "Replace all labels", { collect: true })
   .option("--add-label <name:string>", "Add label", { collect: true })
   .option("--remove-label <name:string>", "Remove label", { collect: true })
@@ -387,7 +397,7 @@ const updateCommand = new Command()
     const description = options.description ?? (await readStdin())
     if (description !== undefined) input.description = description
 
-    if (options.priority) input.priority = options.priority
+    if (options.priority) input.priority = resolvePriority(options.priority)
 
     if (options.assignee !== undefined) {
       if (options.assignee === "") {
@@ -397,12 +407,13 @@ const updateCommand = new Command()
       }
     }
 
-    if (options.state) {
+    const stateName = options.state ?? options.status
+    if (stateName) {
       const state = await issue.state
       const team = await state?.team
       const teamId = team?.id
       if (teamId) {
-        input.stateId = await resolveState(client, teamId, options.state)
+        input.stateId = await resolveState(client, teamId, stateName)
       }
     }
 
@@ -574,31 +585,49 @@ const commentListCommand = new Command()
     }
   })
 
-const commentAddCommand = new Command()
-  .description("Add comment to issue")
-  .arguments("<id:string>")
-  .option("--body <text:string>", "Comment text")
-  .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+async function addComment(
+  options: unknown,
+  id: string,
+  bodyArg?: string,
+): Promise<void> {
+  const format = getFormat(options)
+  const apiKey = await getAPIKey()
+  const client = createClient(apiKey)
+  const teamKey = (options as GlobalOptions).team
 
-    const issue = await resolveIssue(client, id, teamKey)
+  const issue = await resolveIssue(client, id, teamKey)
 
-    const body = options.body ?? (await readStdin())
-    if (!body) {
-      throw new Error("comment body required (use --body or pipe via stdin)")
-    }
+  const body = bodyArg ??
+    (options as { body?: string }).body ?? (await readStdin())
+  if (!body) {
+    throw new CliError(
+      "comment body required",
+      4,
+      `issue comment ${id} "your comment" (or --body or pipe via stdin)`,
+    )
+  }
 
-    await client.createComment({ issueId: issue.id, body })
-    renderMessage(format, `Comment added to ${issue.identifier}`)
-  })
+  await client.createComment({ issueId: issue.id, body })
+  renderMessage(format, `Comment added to ${issue.identifier}`)
+}
 
 const commentCommand = new Command()
-  .description("Manage issue comments")
+  .description("Add comment or list comments")
+  .arguments("<id:string> [body:string]")
+  .option("--body <text:string>", "Comment text (alternative to positional)")
+  .action(
+    (options: Record<string, unknown>, id: string, bodyArg?: string) =>
+      addComment(options, id, bodyArg),
+  )
+  .command("add", new Command()
+    .description("Add comment to issue")
+    .arguments("<id:string> [body:string]")
+    .option("--body <text:string>", "Comment text (alternative to positional)")
+    .action(
+      (options: Record<string, unknown>, id: string, bodyArg?: string) =>
+        addComment(options, id, bodyArg),
+    ))
   .command("list", commentListCommand)
-  .command("add", commentAddCommand)
 
 export const issueCommand = new Command()
   .description("Manage issues")

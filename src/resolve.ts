@@ -248,6 +248,31 @@ export async function resolveIssue(
   return issues.nodes[0]
 }
 
+const PRIORITY_MAP: Record<string, number> = {
+  urgent: 1,
+  high: 2,
+  medium: 3,
+  low: 4,
+  none: 0,
+}
+
+/** Resolve priority name or number to Linear priority int. */
+export function resolvePriority(input: string): number {
+  // Numeric
+  const num = parseInt(input)
+  if (!isNaN(num) && num >= 0 && num <= 4) return num
+
+  // Name
+  const mapped = PRIORITY_MAP[input.toLowerCase()]
+  if (mapped !== undefined) return mapped
+
+  throw new CliError(
+    `invalid priority "${input}"`,
+    4,
+    `--priority urgent (or: high, medium, low, none, 0-4)`,
+  )
+}
+
 /** Read description from stdin when not a TTY. */
 export async function readStdin(): Promise<string | undefined> {
   if (Deno.stdin.isTerminal()) return undefined
