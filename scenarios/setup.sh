@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create test issues for agent usability scenarios.
+# Create test fixtures for agent usability scenarios.
 # Outputs issue IDs as KEY=VALUE pairs for the orchestrator.
 set -euo pipefail
 
@@ -26,5 +26,16 @@ out=$($CLI issue create --team POL --title '[AGENT-TEST] Reprioritize' --priorit
 PRIORITY_ISSUE=$(extract_id "$out")
 echo "PRIORITY_ISSUE=$PRIORITY_ISSUE"
 
+out=$($CLI issue create --team POL --title '[AGENT-TEST] Branch test')
+BRANCH_ISSUE=$(extract_id "$out")
+echo "BRANCH_ISSUE=$BRANCH_ISSUE"
+
+out=$($CLI issue create --team POL --title '[AGENT-TEST] Triage me')
+TRIAGE_ISSUE=$(extract_id "$out")
+echo "TRIAGE_ISSUE=$TRIAGE_ISSUE"
+
+$CLI project create --name '[AGENT-TEST] Update target' --team POL 2>&1 || echo "WARN: project create failed (may already exist)"
+echo "PROJECT_NAME=[AGENT-TEST] Update target"
+
 echo ""
-echo "Setup complete. 4 issues created."
+echo "Setup complete. 6 issues + 1 project created."

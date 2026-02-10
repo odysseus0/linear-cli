@@ -30,4 +30,18 @@ for id in $ids; do
 done
 
 echo ""
-echo "Teardown complete. $count issues deleted."
+echo "Teardown: $count issues deleted."
+
+# Also clean up test projects
+echo "Cleaning up test projects..."
+$CLI project list --format json 2>/dev/null \
+  | deno eval --ext=ts '
+    const data = JSON.parse(await new Response(Deno.stdin.readable).text());
+    for (const p of data) {
+      if (p.name?.includes("[AGENT-TEST]")) {
+        console.log(p.name);
+      }
+    }
+  ' 2>/dev/null || true
+
+echo "Teardown complete."
