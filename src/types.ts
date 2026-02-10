@@ -1,4 +1,4 @@
-import { normalizeFormat, type Format } from "./output/formatter.ts"
+import { type Format, normalizeFormat } from "./output/formatter.ts"
 
 export interface GlobalOptions {
   format?: string

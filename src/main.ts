@@ -3,6 +3,9 @@ import { CliError } from "./errors.ts"
 import type { Format } from "./output/formatter.ts"
 import { authCommand } from "./commands/auth.ts"
 import { teamCommand } from "./commands/team.ts"
+import { issueCommand } from "./commands/issue.ts"
+import { projectCommand } from "./commands/project.ts"
+import { cycleCommand } from "./commands/cycle.ts"
 
 const DEFAULT_FORMAT: Format = Deno.stdout.isTerminal() ? "table" : "compact"
 
@@ -20,6 +23,9 @@ const app = new Command()
   .globalOption("-t, --team <team:string>", "Team key")
   .command("auth", authCommand)
   .command("team", teamCommand)
+  .command("issue", issueCommand)
+  .command("project", projectCommand)
+  .command("cycle", cycleCommand)
 
 try {
   await app.parse(Deno.args)

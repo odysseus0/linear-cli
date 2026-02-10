@@ -5,6 +5,7 @@ import { CliError } from "../errors.ts"
 import { getFormat } from "../types.ts"
 import { render } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
+import { requireTeam } from "../resolve.ts"
 
 interface TeamSummary {
   key: string
@@ -28,9 +29,7 @@ async function findTeam(apiKey: string, key: string) {
   const client = createClient(apiKey)
   const teamsConnection = await client.teams()
   const teams = teamsConnection.nodes
-  const target = teams.find((t) =>
-    t.key.toLowerCase() === key.toLowerCase()
-  )
+  const target = teams.find((t) => t.key.toLowerCase() === key.toLowerCase())
   if (!target) {
     const available = teams.map((t) => t.key).join(", ")
     throw new CliError(`team not found: "${key}"`, 3, `available: ${available}`)
@@ -132,5 +131,106 @@ export const teamCommand = new Command()
             member.active ? "yes" : "no",
           ]),
         })
+      }),
+  )
+  .command(
+    "overview",
+    new Command()
+      .description("Team status dashboard")
+      .action(async (options) => {
+        const format = getFormat(options)
+        const apiKey = await getAPIKey()
+        const teamKey = requireTeam(options)
+        const client = createClient(apiKey)
+
+        const target = await findTeam(apiKey, teamKey)
+
+        // Fetch all active issues for the team
+        const issues = await client.issues({
+          filter: {
+            team: { key: { eq: teamKey } },
+            state: {
+              type: { in: ["backlog", "unstarted", "started", "completed"] },
+            },
+          },
+          first: 200,
+        })
+
+        // Build assignee × state matrix
+        const stateTypes = ["Backlog", "Todo", "In Progress", "Done"]
+        const matrix: Record<string, Record<string, number>> = {}
+
+        for (const issue of issues.nodes) {
+          const assignee = await issue.assignee
+          const state = await issue.state
+          const assigneeName = assignee?.name ?? "Unassigned"
+          const stateType = state?.type ?? "backlog"
+
+          // Map state types to display names
+          let displayState: string
+          switch (stateType) {
+            case "backlog":
+            case "triage":
+              displayState = "Backlog"
+              break
+            case "unstarted":
+              displayState = "Todo"
+              break
+            case "started":
+              displayState = "In Progress"
+              break
+            case "completed":
+              displayState = "Done"
+              break
+            default:
+              displayState = "Backlog"
+          }
+
+          if (!matrix[assigneeName]) {
+            matrix[assigneeName] = {}
+            for (const s of stateTypes) matrix[assigneeName][s] = 0
+          }
+          matrix[assigneeName][displayState] =
+            (matrix[assigneeName][displayState] ?? 0) + 1
+        }
+
+        const assignees = Object.keys(matrix).sort((a, b) => {
+          if (a === "Unassigned") return 1
+          if (b === "Unassigned") return -1
+          return a.localeCompare(b)
+        })
+
+        const total = issues.nodes.length
+        const inProgress = Object.values(matrix).reduce(
+          (sum, row) => sum + (row["In Progress"] ?? 0),
+          0,
+        )
+        const done = Object.values(matrix).reduce(
+          (sum, row) => sum + (row["Done"] ?? 0),
+          0,
+        )
+
+        if (format === "json") {
+          renderJson({ teamKey, matrix, total, inProgress, done })
+          return
+        }
+
+        if (format === "table") {
+          console.log(`${target.name} (${target.key}) — Overview\n`)
+        }
+
+        render(format, {
+          headers: ["Assignee", ...stateTypes],
+          rows: assignees.map((name) => [
+            name,
+            ...stateTypes.map((s) => String(matrix[name][s] ?? 0)),
+          ]),
+        })
+
+        if (format === "table") {
+          console.log(
+            `\nTotal: ${total} issues | ${inProgress} in progress | ${done} done`,
+          )
+        }
       }),
   )
