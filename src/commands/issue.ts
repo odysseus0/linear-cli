@@ -9,10 +9,10 @@ import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import {
   readStdin,
-  resolvePriority,
   requireTeam,
   resolveIssue,
   resolveLabel,
+  resolvePriority,
   resolveProject,
   resolveState,
   resolveTeamId,
@@ -374,7 +374,10 @@ const updateCommand = new Command()
   .option("-a, --assignee <name:string>", "New assignee (empty to unassign)")
   .option("-s, --state <state:string>", "New state name")
   .option("--status <state:string>", "Alias for --state", { hidden: true })
-  .option("--priority <priority:string>", "Priority: urgent, high, medium, low, none (or 0-4)")
+  .option(
+    "--priority <priority:string>",
+    "Priority: urgent, high, medium, low, none (or 0-4)",
+  )
   .option("-l, --label <name:string>", "Replace all labels", { collect: true })
   .option("--add-label <name:string>", "Add label", { collect: true })
   .option("--remove-label <name:string>", "Remove label", { collect: true })
@@ -619,15 +622,40 @@ const commentCommand = new Command()
     (options: Record<string, unknown>, id: string, bodyArg?: string) =>
       addComment(options, id, bodyArg),
   )
-  .command("add", new Command()
-    .description("Add comment to issue")
-    .arguments("<id:string> [body:string]")
-    .option("--body <text:string>", "Comment text (alternative to positional)")
-    .action(
-      (options: Record<string, unknown>, id: string, bodyArg?: string) =>
-        addComment(options, id, bodyArg),
-    ))
+  .command(
+    "add",
+    new Command()
+      .description("Add comment to issue")
+      .arguments("<id:string> [body:string]")
+      .option(
+        "--body <text:string>",
+        "Comment text (alternative to positional)",
+      )
+      .action(
+        (options: Record<string, unknown>, id: string, bodyArg?: string) =>
+          addComment(options, id, bodyArg),
+      ),
+  )
   .command("list", commentListCommand)
+
+const branchCommand = new Command()
+  .description("Get git branch name for issue")
+  .arguments("<id:string>")
+  .action(async (options, id: string) => {
+    const format = getFormat(options)
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const teamKey = (options as unknown as GlobalOptions).team
+
+    const issue = await resolveIssue(client, id, teamKey)
+
+    if (format === "json") {
+      renderJson({ branchName: issue.branchName })
+      return
+    }
+
+    console.log(issue.branchName)
+  })
 
 export const issueCommand = new Command()
   .description("Manage issues")
@@ -637,3 +665,4 @@ export const issueCommand = new Command()
   .command("update", updateCommand)
   .command("delete", deleteCommand)
   .command("comment", commentCommand)
+  .command("branch", branchCommand)

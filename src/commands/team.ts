@@ -236,3 +236,71 @@ export const teamCommand = new Command()
         }
       }),
   )
+  .command(
+    "states",
+    new Command()
+      .description("List workflow states for a team")
+      .arguments("<key:string>")
+      .action(async (options, key: string) => {
+        const format = getFormat(options)
+        const apiKey = await getAPIKey()
+        const target = await findTeam(apiKey, key)
+        const statesConn = await target.states()
+        const states = statesConn.nodes
+
+        if (format === "json") {
+          renderJson(
+            states.map((s) => ({
+              name: s.name,
+              type: s.type,
+              color: s.color,
+              position: s.position,
+            })),
+          )
+          return
+        }
+
+        render(format, {
+          headers: ["Name", "Type", "Color", "Position"],
+          rows: states.map((s) => [
+            s.name,
+            s.type,
+            s.color,
+            String(s.position),
+          ]),
+        })
+      }),
+  )
+  .command(
+    "labels",
+    new Command()
+      .description("List labels for a team")
+      .arguments("<key:string>")
+      .action(async (options, key: string) => {
+        const format = getFormat(options)
+        const apiKey = await getAPIKey()
+        const target = await findTeam(apiKey, key)
+        const labelsConn = await target.labels()
+        const labels = labelsConn.nodes
+
+        if (format === "json") {
+          renderJson(
+            labels.map((l) => ({
+              name: l.name,
+              color: l.color,
+              description: l.description ?? "",
+            })),
+          )
+          return
+        }
+
+        render(format, {
+          headers: ["Name", "Color", "Description"],
+          rows: labels.map((l) => [
+            l.name,
+            l.color,
+            l.description ?? "-",
+          ]),
+        })
+      }),
+  )
