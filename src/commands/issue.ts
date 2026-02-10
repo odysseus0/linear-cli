@@ -152,6 +152,27 @@ const listCommand = new Command()
       return
     }
 
+    if (rows.length === 0) {
+      // Confirm what was resolved when results are empty
+      if (options.assignee) {
+        const viewer = options.assignee === "me"
+          ? await (async () => {
+            const v = await client.viewer
+            return v.name
+          })()
+          : options.assignee
+        renderMessage(
+          format,
+          `No issues found for assignee "${viewer}"${
+            options.assignee === "me" ? ' (resolved from "me")' : ""
+          } in team ${teamKey}`,
+        )
+      } else {
+        renderMessage(format, `No issues found in team ${teamKey}`)
+      }
+      return
+    }
+
     if (format === "table") {
       render("table", {
         headers: ["\u25CC", "ID", "State", "Assignee", "Title", "Updated"],
@@ -179,6 +200,7 @@ const listCommand = new Command()
   })
 
 const viewCommand = new Command()
+  .alias("show")
   .description("View issue details")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
@@ -659,6 +681,7 @@ const branchCommand = new Command()
 
 export const issueCommand = new Command()
   .description("Manage issues")
+  .alias("issues")
   .command("list", listCommand)
   .command("view", viewCommand)
   .command("create", createCommand)

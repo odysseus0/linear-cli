@@ -8,6 +8,7 @@ import { renderJson } from "../output/json.ts"
 
 export const userCommand = new Command()
   .description("Manage users")
+  .alias("users")
   .command(
     "list",
     new Command()
@@ -46,6 +47,7 @@ export const userCommand = new Command()
   .command(
     "view",
     new Command()
+      .alias("show")
       .description("View user details")
       .arguments("<name:string>")
       .action(async (options, name: string) => {
@@ -101,6 +103,45 @@ export const userCommand = new Command()
           }
           user = found
         }
+
+        const details = {
+          name: user.name,
+          displayName: user.displayName,
+          email: user.email ?? "-",
+          admin: user.admin ?? false,
+          active: user.active ?? true,
+          createdAt: user.createdAt
+            ? new Date(user.createdAt).toISOString().slice(0, 10)
+            : "-",
+        }
+
+        if (format === "json") {
+          renderJson(details)
+          return
+        }
+
+        render(format, {
+          title: details.name,
+          fields: [
+            { label: "Display Name", value: details.displayName },
+            { label: "Email", value: details.email },
+            { label: "Admin", value: details.admin ? "yes" : "no" },
+            { label: "Active", value: details.active ? "yes" : "no" },
+            { label: "Created", value: details.createdAt },
+          ],
+        })
+      }),
+  )
+  .command(
+    "me",
+    new Command()
+      .description("Show current authenticated user")
+      .action(async (options) => {
+        const format = getFormat(options)
+        const apiKey = await getAPIKey()
+        const client = createClient(apiKey)
+
+        const user = await client.viewer
 
         const details = {
           name: user.name,

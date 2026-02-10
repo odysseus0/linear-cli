@@ -59,6 +59,7 @@ const listCommand = new Command()
   })
 
 const viewCommand = new Command()
+  .alias("show")
   .description("View initiative details")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
@@ -267,6 +268,7 @@ const updateCommand = new Command()
 
 export const initiativeCommand = new Command()
   .description("Manage initiatives")
+  .alias("initiatives")
   .command("list", listCommand)
   .command("view", viewCommand)
   .command("create", createCommand)

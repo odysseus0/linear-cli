@@ -109,6 +109,7 @@ const listCommand = new Command()
   })
 
 const viewCommand = new Command()
+  .alias("show")
   .description("View project details")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
@@ -144,6 +145,7 @@ const viewCommand = new Command()
     if (format === "json") {
       renderJson({
         name: project.name,
+        description: project.description ?? null,
         state: project.state ?? "-",
         progress: `${Math.round((project.progress ?? 0) * 100)}%`,
         lead: lead?.name ?? null,
@@ -159,6 +161,7 @@ const viewCommand = new Command()
     if (format === "compact") {
       const lines = [
         `name\t${project.name}`,
+        `description\t${project.description ?? "-"}`,
         `state\t${project.state ?? "-"}`,
         `progress\t${
           Math.round((project.progress ?? 0) * 100)
@@ -175,6 +178,7 @@ const viewCommand = new Command()
     render("table", {
       title: project.name,
       fields: [
+        { label: "Description", value: project.description ?? "-" },
         { label: "State", value: project.state ?? "-" },
         {
           label: "Progress",
@@ -388,11 +392,13 @@ const milestoneListCommand = new Command()
   })
 
 const milestoneCreateCommand = new Command()
+  .alias("add")
   .description("Create milestone on a project")
   .arguments("<name:string>")
   .option("--name <name:string>", "Milestone name", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("--target-date <date:string>", "Target date (YYYY-MM-DD)")
+  .option("--date <date:string>", "Alias for --target-date", { hidden: true })
   .action(async (options, projectName: string) => {
     const format = getFormat(options)
     const apiKey = await getAPIKey()
@@ -407,7 +413,9 @@ const milestoneCreateCommand = new Command()
     }
 
     if (options.description) input.description = options.description
-    if (options.targetDate) input.targetDate = options.targetDate
+    const targetDate = options.targetDate ??
+      (options as { date?: string }).date
+    if (targetDate) input.targetDate = targetDate
 
     const payload = await client.createProjectMilestone(input)
     const milestone = await payload.projectMilestone
@@ -547,6 +555,7 @@ const labelsCommand = new Command()
 
 export const projectCommand = new Command()
   .description("Manage projects")
+  .alias("projects")
   .command("list", listCommand)
   .command("view", viewCommand)
   .command("create", createCommand)

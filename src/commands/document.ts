@@ -56,6 +56,7 @@ const listCommand = new Command()
   })
 
 const viewCommand = new Command()
+  .alias("show")
   .description("View document")
   .arguments("<title-or-id:string>")
   .action(async (options, titleOrId: string) => {
@@ -161,6 +162,7 @@ const createCommand = new Command()
 
 export const documentCommand = new Command()
   .description("Manage documents")
+  .alias("documents").alias("doc").alias("docs")
   .command("list", listCommand)
   .command("view", viewCommand)
   .command("create", createCommand)

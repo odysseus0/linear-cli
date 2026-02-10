@@ -39,6 +39,7 @@ async function findTeam(apiKey: string, key: string) {
 
 export const teamCommand = new Command()
   .description("Manage teams")
+  .alias("teams")
   .command(
     "list",
     new Command()
@@ -65,6 +66,7 @@ export const teamCommand = new Command()
   .command(
     "view",
     new Command()
+      .alias("show")
       .description("View team details")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
