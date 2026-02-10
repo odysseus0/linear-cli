@@ -24,7 +24,11 @@ export function renderTable(
     console.log()
     const maxLabel = Math.max(...data.fields.map((f) => f.label.length))
     for (const field of data.fields) {
-      console.log(`${field.label + ":"}${" ".repeat(maxLabel - field.label.length + 3)}${field.value}`)
+      console.log(
+        `${field.label + ":"}${
+          " ".repeat(maxLabel - field.label.length + 3)
+        }${field.value}`,
+      )
     }
     return
   }

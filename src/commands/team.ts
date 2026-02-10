@@ -137,10 +137,12 @@ export const teamCommand = new Command()
     "overview",
     new Command()
       .description("Team status dashboard")
-      .action(async (options) => {
+      .arguments("[key:string]")
+      .action(async (options, key?: string) => {
         const format = getFormat(options)
         const apiKey = await getAPIKey()
-        const teamKey = requireTeam(options)
+        // Positional arg takes precedence over --team flag
+        const teamKey = key ?? requireTeam(options)
         const client = createClient(apiKey)
 
         const target = await findTeam(apiKey, teamKey)

@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command"
+import { Command, ValidationError } from "@cliffy/command"
 import { CliError } from "./errors.ts"
 import type { Format } from "./output/formatter.ts"
 import { authCommand } from "./commands/auth.ts"
@@ -36,6 +36,11 @@ try {
       console.error(`  try: ${error.hint}`)
     }
     Deno.exit(error.code)
+  }
+  if (error instanceof ValidationError) {
+    console.error(`error: ${error.message}`)
+    console.error(`  try: ${Deno.args[0]} --help`)
+    Deno.exit(4)
   }
   throw error
 }
