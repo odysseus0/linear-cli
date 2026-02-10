@@ -1,4 +1,4 @@
-import type { Issue, LinearClient } from "@linear/sdk"
+import type { Document, Initiative, Issue, LinearClient } from "@linear/sdk"
 import { CliError } from "./errors.ts"
 
 /** Extract team key from options or env, throw if missing. */
@@ -270,6 +270,96 @@ export function resolvePriority(input: string): number {
     `invalid priority "${input}"`,
     4,
     `--priority urgent (or: high, medium, low, none, 0-4)`,
+  )
+}
+
+/** Resolve document by title (substring match) or UUID. */
+export async function resolveDocument(
+  client: LinearClient,
+  titleOrId: string,
+): Promise<Document> {
+  // UUID match
+  if (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      titleOrId,
+    )
+  ) {
+    return await client.document(titleOrId)
+  }
+
+  const docs = await client.documents()
+  const all = docs.nodes
+
+  // Exact title match (case-insensitive)
+  const exact = all.find(
+    (d) => d.title.toLowerCase() === titleOrId.toLowerCase(),
+  )
+  if (exact) return exact
+
+  // Substring match
+  const partial = all.filter(
+    (d) => d.title.toLowerCase().includes(titleOrId.toLowerCase()),
+  )
+  if (partial.length === 1) return partial[0]
+  if (partial.length > 1) {
+    const candidates = partial.map((d) => d.title).join(", ")
+    throw new CliError(
+      `ambiguous document "${titleOrId}"`,
+      4,
+      `matches: ${candidates}`,
+    )
+  }
+
+  const available = all.map((d) => d.title).join(", ")
+  throw new CliError(
+    `document not found: "${titleOrId}"`,
+    3,
+    `available: ${available}`,
+  )
+}
+
+/** Resolve initiative by name (substring match) or UUID. */
+export async function resolveInitiative(
+  client: LinearClient,
+  nameOrId: string,
+): Promise<Initiative> {
+  // UUID match
+  if (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      nameOrId,
+    )
+  ) {
+    return await client.initiative(nameOrId)
+  }
+
+  const initiatives = await client.initiatives()
+  const all = initiatives.nodes
+
+  // Exact name match (case-insensitive)
+  const exact = all.find(
+    (i) => i.name.toLowerCase() === nameOrId.toLowerCase(),
+  )
+  if (exact) return exact
+
+  // Substring match
+  const partial = all.filter(
+    (i) => i.name.toLowerCase().includes(nameOrId.toLowerCase()),
+  )
+  if (partial.length === 1) return partial[0]
+  if (partial.length > 1) {
+    const candidates = partial.map((i) => i.name).join(", ")
+    throw new CliError(
+      `ambiguous initiative "${nameOrId}"`,
+      4,
+      `matches: ${candidates}`,
+    )
+  }
+
+  const available = all.map((i) => i.name).join(", ")
+  throw new CliError(
+    `initiative not found: "${nameOrId}"`,
+    3,
+    `available: ${available}`,
   )
 }
 
