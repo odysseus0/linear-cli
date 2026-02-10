@@ -1,6 +1,87 @@
 import type { Document, Initiative, Issue, LinearClient } from "@linear/sdk"
 import { CliError } from "./errors.ts"
 
+// ---------------------------------------------------------------------------
+// Generic entity resolver
+// ---------------------------------------------------------------------------
+
+interface ResolveOpts<T> {
+  /** All candidate entities. */
+  items: T[]
+  /** User input to match against. */
+  input: string
+  /** Primary match field (e.g., name, title). */
+  key: (item: T) => string
+  /** Optional alternate match fields (e.g., email). */
+  altKeys?: (item: T) => string[]
+  /** Entity type name for error messages. */
+  entity: string
+  /** Format a candidate for disambiguation display. Defaults to key(). */
+  display?: (item: T) => string
+}
+
+/**
+ * Resolve a human-friendly string to a single entity.
+ *
+ * Resolution chain (first match wins):
+ *   1. Exact match on primary key (case-insensitive)
+ *   2. Exact match on any alt key (case-insensitive)
+ *   3. Unique substring match on primary key
+ *   4. Ambiguous → error listing candidates
+ *   5. Not found → error listing all available
+ */
+function resolve<T>(opts: ResolveOpts<T>): T {
+  const { items, input, key, altKeys, entity, display } = opts
+  const lower = input.toLowerCase()
+  const fmt = display ?? key
+
+  // 1. Exact match on primary key
+  const exact = items.find((item) => key(item).toLowerCase() === lower)
+  if (exact) return exact
+
+  // 2. Exact match on alt keys
+  if (altKeys) {
+    for (const item of items) {
+      if (altKeys(item).some((k) => k.toLowerCase() === lower)) {
+        return item
+      }
+    }
+  }
+
+  // 3. Substring match on primary key
+  const partial = items.filter((item) =>
+    key(item).toLowerCase().includes(lower)
+  )
+  if (partial.length === 1) return partial[0]
+  if (partial.length > 1) {
+    const candidates = partial.map((p) => fmt(p)).join(", ")
+    throw new CliError(
+      `ambiguous ${entity} "${input}"`,
+      4,
+      `matches: ${candidates}`,
+    )
+  }
+
+  // 4. Not found
+  const available = items.map((item) => fmt(item)).join(", ")
+  throw new CliError(
+    `${entity} not found: "${input}"`,
+    3,
+    `available: ${available}`,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// UUID helper
+// ---------------------------------------------------------------------------
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// ---------------------------------------------------------------------------
+// Option helpers
+// ---------------------------------------------------------------------------
+
 /** Extract team key from options or env, throw if missing. */
 export function requireTeam(options: unknown): string {
   const team = (options as { team?: string }).team ??
@@ -15,24 +96,23 @@ export function requireTeam(options: unknown): string {
   return team
 }
 
+// ---------------------------------------------------------------------------
+// Entity resolvers — thin wrappers around resolve()
+// ---------------------------------------------------------------------------
+
 /** Resolve team key to team ID. */
 export async function resolveTeamId(
   client: LinearClient,
   teamKey: string,
 ): Promise<string> {
   const teams = await client.teams()
-  const team = teams.nodes.find(
-    (t) => t.key.toLowerCase() === teamKey.toLowerCase(),
-  )
-  if (!team) {
-    const available = teams.nodes.map((t) => t.key).join(", ")
-    throw new CliError(
-      `team not found: "${teamKey}"`,
-      3,
-      `available: ${available}`,
-    )
-  }
-  return team.id
+  return resolve({
+    items: teams.nodes,
+    input: teamKey,
+    key: (t) => t.key,
+    entity: "team",
+    display: (t) => t.key,
+  }).id
 }
 
 /** Resolve user name to ID. Supports "me" for current viewer. */
@@ -46,36 +126,14 @@ export async function resolveUser(
   }
 
   const users = await client.users()
-  const all = users.nodes
-
-  // Exact match (case-insensitive)
-  const exact = all.find(
-    (u) => u.name.toLowerCase() === name.toLowerCase(),
-  )
-  if (exact) return exact.id
-
-  // Email exact match
-  const emailExact = all.find(
-    (u) => u.email?.toLowerCase() === name.toLowerCase(),
-  )
-  if (emailExact) return emailExact.id
-
-  // Substring match on name
-  const partial = all.filter(
-    (u) => u.name.toLowerCase().includes(name.toLowerCase()),
-  )
-  if (partial.length === 1) return partial[0].id
-  if (partial.length > 1) {
-    const candidates = partial.map((u) => `${u.name} (${u.email})`).join(", ")
-    throw new CliError(
-      `ambiguous user "${name}"`,
-      4,
-      `matches: ${candidates}`,
-    )
-  }
-
-  const available = all.map((u) => `${u.name} (${u.email})`).join(", ")
-  throw new CliError(`user not found: "${name}"`, 3, `available: ${available}`)
+  return resolve({
+    items: users.nodes,
+    input: name,
+    key: (u) => u.name,
+    altKeys: (u) => [u.email ?? ""],
+    entity: "user",
+    display: (u) => `${u.name} (${u.email})`,
+  }).id
 }
 
 /** Resolve label name to ID within a team. */
@@ -86,32 +144,12 @@ export async function resolveLabel(
 ): Promise<string> {
   const team = await client.team(teamId)
   const labels = await team.labels()
-  const all = labels.nodes
-
-  const exact = all.find(
-    (l) => l.name.toLowerCase() === name.toLowerCase(),
-  )
-  if (exact) return exact.id
-
-  const partial = all.filter(
-    (l) => l.name.toLowerCase().includes(name.toLowerCase()),
-  )
-  if (partial.length === 1) return partial[0].id
-  if (partial.length > 1) {
-    const candidates = partial.map((l) => l.name).join(", ")
-    throw new CliError(
-      `ambiguous label "${name}"`,
-      4,
-      `matches: ${candidates}`,
-    )
-  }
-
-  const available = all.map((l) => l.name).join(", ")
-  throw new CliError(
-    `label not found: "${name}"`,
-    3,
-    `available: ${available}`,
-  )
+  return resolve({
+    items: labels.nodes,
+    input: name,
+    key: (l) => l.name,
+    entity: "label",
+  }).id
 }
 
 /** Resolve project name to ID. */
@@ -120,32 +158,26 @@ export async function resolveProject(
   name: string,
 ): Promise<string> {
   const projects = await client.projects()
-  const all = projects.nodes
+  return resolve({
+    items: projects.nodes,
+    input: name,
+    key: (p) => p.name,
+    entity: "project",
+  }).id
+}
 
-  const exact = all.find(
-    (p) => p.name.toLowerCase() === name.toLowerCase(),
-  )
-  if (exact) return exact.id
-
-  const partial = all.filter(
-    (p) => p.name.toLowerCase().includes(name.toLowerCase()),
-  )
-  if (partial.length === 1) return partial[0].id
-  if (partial.length > 1) {
-    const candidates = partial.map((p) => p.name).join(", ")
-    throw new CliError(
-      `ambiguous project "${name}"`,
-      4,
-      `matches: ${candidates}`,
-    )
-  }
-
-  const available = all.map((p) => p.name).join(", ")
-  throw new CliError(
-    `project not found: "${name}"`,
-    3,
-    `available: ${available}`,
-  )
+/** Resolve project name to full Project object. */
+export async function resolveProjectByName(
+  client: LinearClient,
+  name: string,
+) {
+  const projects = await client.projects()
+  return resolve({
+    items: projects.nodes,
+    input: name,
+    key: (p) => p.name,
+    entity: "project",
+  })
 }
 
 /** Resolve workflow state name to ID within a team. */
@@ -156,52 +188,65 @@ export async function resolveState(
 ): Promise<string> {
   const team = await client.team(teamId)
   const states = await team.states()
-  const all = states.nodes
+  return resolve({
+    items: states.nodes,
+    input: name,
+    key: (s) => s.name,
+    entity: "state",
+  }).id
+}
 
-  const exact = all.find(
-    (s) => s.name.toLowerCase() === name.toLowerCase(),
-  )
-  if (exact) return exact.id
-
-  const partial = all.filter(
-    (s) => s.name.toLowerCase().includes(name.toLowerCase()),
-  )
-  if (partial.length === 1) return partial[0].id
-  if (partial.length > 1) {
-    const candidates = partial.map((s) => s.name).join(", ")
-    throw new CliError(
-      `ambiguous state "${name}"`,
-      4,
-      `matches: ${candidates}`,
-    )
+/** Resolve document by title or UUID. Returns full Document. */
+export async function resolveDocument(
+  client: LinearClient,
+  titleOrId: string,
+): Promise<Document> {
+  if (UUID_RE.test(titleOrId)) {
+    return await client.document(titleOrId)
   }
 
-  const available = all.map((s) => s.name).join(", ")
-  throw new CliError(
-    `state not found: "${name}"`,
-    3,
-    `available: ${available}`,
-  )
+  const docs = await client.documents()
+  return resolve({
+    items: docs.nodes,
+    input: titleOrId,
+    key: (d) => d.title,
+    entity: "document",
+  })
 }
+
+/** Resolve initiative by name or UUID. Returns full Initiative. */
+export async function resolveInitiative(
+  client: LinearClient,
+  nameOrId: string,
+): Promise<Initiative> {
+  if (UUID_RE.test(nameOrId)) {
+    return await client.initiative(nameOrId)
+  }
+
+  const initiatives = await client.initiatives()
+  return resolve({
+    items: initiatives.nodes,
+    input: nameOrId,
+    key: (i) => i.name,
+    entity: "initiative",
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Issue resolution (different pattern — identifier parsing + API filter)
+// ---------------------------------------------------------------------------
 
 /** Parse issue identifier into components. */
 export function parseIssueId(
   input: string,
 ): { teamKey?: string; number?: number; uuid?: string } {
-  // UUID
-  if (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      input,
-    )
-  ) {
+  if (UUID_RE.test(input)) {
     return { uuid: input }
   }
-  // POL-5 format
   const match = input.match(/^([A-Za-z]+)-(\d+)$/)
   if (match) {
     return { teamKey: match[1].toUpperCase(), number: parseInt(match[2]) }
   }
-  // Bare number
   const num = parseInt(input)
   if (!isNaN(num)) {
     return { number: num }
@@ -248,6 +293,10 @@ export async function resolveIssue(
   return issues.nodes[0]
 }
 
+// ---------------------------------------------------------------------------
+// Priority resolution (enum mapping, not entity lookup)
+// ---------------------------------------------------------------------------
+
 const PRIORITY_MAP: Record<string, number> = {
   urgent: 1,
   high: 2,
@@ -258,11 +307,9 @@ const PRIORITY_MAP: Record<string, number> = {
 
 /** Resolve priority name or number to Linear priority int. */
 export function resolvePriority(input: string): number {
-  // Numeric
   const num = parseInt(input)
   if (!isNaN(num) && num >= 0 && num <= 4) return num
 
-  // Name
   const mapped = PRIORITY_MAP[input.toLowerCase()]
   if (mapped !== undefined) return mapped
 
@@ -273,95 +320,9 @@ export function resolvePriority(input: string): number {
   )
 }
 
-/** Resolve document by title (substring match) or UUID. */
-export async function resolveDocument(
-  client: LinearClient,
-  titleOrId: string,
-): Promise<Document> {
-  // UUID match
-  if (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      titleOrId,
-    )
-  ) {
-    return await client.document(titleOrId)
-  }
-
-  const docs = await client.documents()
-  const all = docs.nodes
-
-  // Exact title match (case-insensitive)
-  const exact = all.find(
-    (d) => d.title.toLowerCase() === titleOrId.toLowerCase(),
-  )
-  if (exact) return exact
-
-  // Substring match
-  const partial = all.filter(
-    (d) => d.title.toLowerCase().includes(titleOrId.toLowerCase()),
-  )
-  if (partial.length === 1) return partial[0]
-  if (partial.length > 1) {
-    const candidates = partial.map((d) => d.title).join(", ")
-    throw new CliError(
-      `ambiguous document "${titleOrId}"`,
-      4,
-      `matches: ${candidates}`,
-    )
-  }
-
-  const available = all.map((d) => d.title).join(", ")
-  throw new CliError(
-    `document not found: "${titleOrId}"`,
-    3,
-    `available: ${available}`,
-  )
-}
-
-/** Resolve initiative by name (substring match) or UUID. */
-export async function resolveInitiative(
-  client: LinearClient,
-  nameOrId: string,
-): Promise<Initiative> {
-  // UUID match
-  if (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      nameOrId,
-    )
-  ) {
-    return await client.initiative(nameOrId)
-  }
-
-  const initiatives = await client.initiatives()
-  const all = initiatives.nodes
-
-  // Exact name match (case-insensitive)
-  const exact = all.find(
-    (i) => i.name.toLowerCase() === nameOrId.toLowerCase(),
-  )
-  if (exact) return exact
-
-  // Substring match
-  const partial = all.filter(
-    (i) => i.name.toLowerCase().includes(nameOrId.toLowerCase()),
-  )
-  if (partial.length === 1) return partial[0]
-  if (partial.length > 1) {
-    const candidates = partial.map((i) => i.name).join(", ")
-    throw new CliError(
-      `ambiguous initiative "${nameOrId}"`,
-      4,
-      `matches: ${candidates}`,
-    )
-  }
-
-  const available = all.map((i) => i.name).join(", ")
-  throw new CliError(
-    `initiative not found: "${nameOrId}"`,
-    3,
-    `available: ${available}`,
-  )
-}
+// ---------------------------------------------------------------------------
+// Stdin helper
+// ---------------------------------------------------------------------------
 
 /** Read description from stdin when not a TTY. */
 export async function readStdin(): Promise<string | undefined> {

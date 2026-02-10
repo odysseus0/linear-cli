@@ -1,50 +1,21 @@
 import { Command } from "@cliffy/command"
-import type { LinearClient } from "@linear/sdk"
 import { createClient } from "../client.ts"
 import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
 import { getFormat } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
-import { readStdin, resolveUser } from "../resolve.ts"
+import {
+  readStdin,
+  resolveProjectByName,
+  resolveUser,
+} from "../resolve.ts"
 import { formatDate, relativeTime } from "../time.ts"
 
 const HEALTH_MAP: Record<string, string> = {
   ontrack: "onTrack",
   atrisk: "atRisk",
   offtrack: "offTrack",
-}
-
-/** Resolve project by name, returning the full Project object. */
-async function resolveProjectByName(client: LinearClient, name: string) {
-  const projects = await client.projects()
-  const all = projects.nodes
-  let project = all.find(
-    (p) => p.name.toLowerCase() === name.toLowerCase(),
-  )
-  if (!project) {
-    const partial = all.filter(
-      (p) => p.name.toLowerCase().includes(name.toLowerCase()),
-    )
-    if (partial.length === 1) project = partial[0]
-    if (!partial.length) {
-      const available = all.map((p) => p.name).join(", ")
-      throw new CliError(
-        `project not found: "${name}"`,
-        3,
-        `available: ${available}`,
-      )
-    }
-    if (partial.length > 1) {
-      const candidates = partial.map((p) => p.name).join(", ")
-      throw new CliError(
-        `ambiguous project "${name}"`,
-        4,
-        `matches: ${candidates}`,
-      )
-    }
-  }
-  return project!
 }
 
 const listCommand = new Command()
