@@ -6,6 +6,8 @@ import { teamCommand } from "./commands/team.ts"
 import { issueCommand } from "./commands/issue.ts"
 import { projectCommand } from "./commands/project.ts"
 import { cycleCommand } from "./commands/cycle.ts"
+import { documentCommand } from "./commands/document.ts"
+import { initiativeCommand } from "./commands/initiative.ts"
 import denoConfig from "../deno.json" with { type: "json" }
 
 const DEFAULT_FORMAT: Format = Deno.stdout.isTerminal() ? "table" : "compact"
@@ -27,6 +29,8 @@ const app = new Command()
   .command("issue", issueCommand)
   .command("project", projectCommand)
   .command("cycle", cycleCommand)
+  .command("document", documentCommand)
+  .command("initiative", initiativeCommand)
 
 try {
   await app.parse(Deno.args)

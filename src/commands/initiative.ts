@@ -1,0 +1,273 @@
+import { Command } from "@cliffy/command"
+import { createClient } from "../client.ts"
+import { getAPIKey } from "../auth.ts"
+import { getFormat } from "../types.ts"
+import { render, renderMessage } from "../output/formatter.ts"
+import { renderJson } from "../output/json.ts"
+import { readStdin, resolveInitiative, resolveUser } from "../resolve.ts"
+import { formatDate, relativeTime } from "../time.ts"
+
+const listCommand = new Command()
+  .description("List initiatives")
+  .option(
+    "-s, --status <status:string>",
+    "Filter: planned, active, completed",
+  )
+  .action(async (options) => {
+    const format = getFormat(options)
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+
+    const initiatives = await client.initiatives()
+    let items = initiatives.nodes
+
+    if (options.status) {
+      const target = options.status.toLowerCase()
+      items = items.filter(
+        (i) => i.status.toLowerCase() === target,
+      )
+    }
+
+    const rows = await Promise.all(
+      items.map(async (i) => {
+        const owner = await i.owner
+        return {
+          name: i.name,
+          status: i.status,
+          owner: owner?.name ?? "-",
+          targetDate: i.targetDate ?? "-",
+          createdAt: i.createdAt,
+        }
+      }),
+    )
+
+    if (format === "json") {
+      renderJson(rows)
+      return
+    }
+
+    render(format, {
+      headers: ["Name", "Status", "Owner", "Target", "Created"],
+      rows: rows.map((r) => [
+        r.name,
+        r.status,
+        r.owner,
+        r.targetDate,
+        relativeTime(r.createdAt),
+      ]),
+    })
+  })
+
+const viewCommand = new Command()
+  .description("View initiative details")
+  .arguments("<name:string>")
+  .action(async (options, name: string) => {
+    const format = getFormat(options)
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+
+    const initiative = await resolveInitiative(client, name)
+
+    const owner = await initiative.owner
+    const creator = await initiative.creator
+    const projects = await initiative.projects()
+
+    if (format === "json") {
+      renderJson({
+        id: initiative.id,
+        name: initiative.name,
+        description: initiative.description ?? null,
+        status: initiative.status,
+        owner: owner?.name ?? null,
+        creator: creator?.name ?? null,
+        targetDate: initiative.targetDate ?? null,
+        health: initiative.health ?? null,
+        url: initiative.url,
+        createdAt: initiative.createdAt,
+        updatedAt: initiative.updatedAt,
+        projects: projects.nodes.map((p) => p.name),
+      })
+      return
+    }
+
+    if (format === "compact") {
+      const lines = [
+        `name\t${initiative.name}`,
+        `status\t${initiative.status}`,
+        `owner\t${owner?.name ?? "-"}`,
+        `target\t${initiative.targetDate ?? "-"}`,
+        `health\t${initiative.health ?? "-"}`,
+        `projects\t${projects.nodes.map((p) => p.name).join(", ") || "-"}`,
+        `url\t${initiative.url}`,
+      ]
+      console.log(lines.join("\n"))
+      return
+    }
+
+    render("table", {
+      title: initiative.name,
+      fields: [
+        { label: "Status", value: initiative.status },
+        { label: "Owner", value: owner?.name ?? "-" },
+        { label: "Creator", value: creator?.name ?? "-" },
+        { label: "Target", value: initiative.targetDate ?? "-" },
+        { label: "Health", value: initiative.health ?? "-" },
+        {
+          label: "Projects",
+          value: projects.nodes.map((p) => p.name).join(", ") || "-",
+        },
+        {
+          label: "Created",
+          value: `${formatDate(initiative.createdAt)} (${
+            relativeTime(initiative.createdAt)
+          })`,
+        },
+        { label: "URL", value: initiative.url },
+      ],
+    })
+
+    if (initiative.description) {
+      console.log(`\n${initiative.description}`)
+    }
+  })
+
+const createCommand = new Command()
+  .description("Create initiative")
+  .option("--name <name:string>", "Initiative name", { required: true })
+  .option("-d, --description <desc:string>", "Description")
+  .option("--owner <name:string>", "Initiative owner")
+  .option(
+    "-s, --status <status:string>",
+    "Status: planned, active, completed",
+  )
+  .option("--target-date <date:string>", "Target date (YYYY-MM-DD)")
+  .action(async (options) => {
+    const format = getFormat(options)
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+
+    const content = options.description ?? await readStdin()
+
+    // deno-lint-ignore no-explicit-any
+    const input: any = {
+      name: options.name,
+    }
+
+    if (content) input.description = content
+    if (options.targetDate) input.targetDate = options.targetDate
+    if (options.status) {
+      // Normalize to InitiativeStatus enum values
+      const statusMap: Record<string, string> = {
+        planned: "Planned",
+        active: "Active",
+        completed: "Completed",
+      }
+      const normalized = statusMap[options.status.toLowerCase()]
+      if (!normalized) {
+        throw new Error(
+          `invalid status "${options.status}" (use: planned, active, completed)`,
+        )
+      }
+      input.status = normalized
+    }
+
+    if (options.owner) {
+      input.ownerId = await resolveUser(client, options.owner)
+    }
+
+    const payload = await client.createInitiative(input)
+    const initiative = await payload.initiative
+
+    if (!initiative) {
+      throw new Error("failed to create initiative")
+    }
+
+    if (format === "json") {
+      renderJson({ name: initiative.name, url: initiative.url })
+      return
+    }
+
+    renderMessage(
+      format,
+      `Created initiative: ${initiative.name}\n${initiative.url}`,
+    )
+  })
+
+const updateCommand = new Command()
+  .description("Update initiative")
+  .arguments("<name:string>")
+  .option("--name <name:string>", "New name")
+  .option("-d, --description <desc:string>", "New description")
+  .option("--owner <name:string>", "New owner")
+  .option(
+    "-s, --status <status:string>",
+    "New status: planned, active, completed",
+  )
+  .option("--target-date <date:string>", "New target date (YYYY-MM-DD)")
+  .action(async (options, currentName: string) => {
+    const format = getFormat(options)
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+
+    const initiative = await resolveInitiative(client, currentName)
+
+    // deno-lint-ignore no-explicit-any
+    const input: any = {}
+
+    if (options.name) input.name = options.name
+    if (options.description) input.description = options.description
+    if (options.targetDate) input.targetDate = options.targetDate
+    if (options.status) {
+      const statusMap: Record<string, string> = {
+        planned: "Planned",
+        active: "Active",
+        completed: "Completed",
+      }
+      const normalized = statusMap[options.status.toLowerCase()]
+      if (!normalized) {
+        throw new Error(
+          `invalid status "${options.status}" (use: planned, active, completed)`,
+        )
+      }
+      input.status = normalized
+    }
+
+    if (options.owner) {
+      input.ownerId = await resolveUser(client, options.owner)
+    }
+
+    await client.updateInitiative(initiative.id, input)
+
+    // Re-fetch and display updated initiative
+    const updated = await client.initiative(initiative.id)
+    const updatedOwner = await updated.owner
+
+    if (format === "json") {
+      renderJson({
+        id: updated.id,
+        name: updated.name,
+        status: updated.status,
+        owner: updatedOwner?.name ?? null,
+        targetDate: updated.targetDate ?? null,
+        url: updated.url,
+      })
+      return
+    }
+
+    render(format === "table" ? "table" : "compact", {
+      title: updated.name,
+      fields: [
+        { label: "Status", value: updated.status },
+        { label: "Owner", value: updatedOwner?.name ?? "-" },
+        { label: "Target", value: updated.targetDate ?? "-" },
+        { label: "URL", value: updated.url },
+      ],
+    })
+  })
+
+export const initiativeCommand = new Command()
+  .description("Manage initiatives")
+  .command("list", listCommand)
+  .command("view", viewCommand)
+  .command("create", createCommand)
+  .command("update", updateCommand)
