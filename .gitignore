@@ -16,3 +16,6 @@ linctl-*
 # Environment
 .env
 .env.local
+
+# Test reports
+scenarios/report.md
