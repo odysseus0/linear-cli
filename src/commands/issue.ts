@@ -56,6 +56,9 @@ const listCommand = new Command()
   .description("List issues")
   .example("List team issues", "linear issue list --team POL")
   .example("List my issues", "linear issue list --team POL --assignee me")
+  .example("Urgent issues", "linear issue list --team POL --priority urgent")
+  .example("Current cycle", "linear issue list --team POL --cycle current")
+  .example("Overdue issues", "linear issue list --team POL --overdue")
   .option("-s, --state <state:string>", "State type filter", {
     collect: true,
   })
@@ -67,6 +70,10 @@ const listCommand = new Command()
   .option("-U, --unassigned", "Show only unassigned")
   .option("-l, --label <name:string>", "Filter by label", { collect: true })
   .option("-p, --project <name:string>", "Filter by project")
+  .option("--priority <priority:string>", "Filter by priority: urgent, high, medium, low, none (or 0-4)")
+  .option("--cycle <cycle:string>", "Filter by cycle: current, next, or cycle number")
+  .option("--due <date:string>", "Issues due on or before date (YYYY-MM-DD)")
+  .option("--overdue", "Show only overdue issues (past due date)")
   .option("--sort <field:string>", "Sort: updated, created, priority", {
     default: "updatedAt",
   })
@@ -124,6 +131,79 @@ const listCommand = new Command()
     if (options.project) {
       const projectId = await resolveProject(client, options.project)
       filter.project = { id: { eq: projectId } }
+    }
+
+    // Priority filter
+    if (options.priority) {
+      filter.priority = { eq: resolvePriority(options.priority) }
+    }
+
+    // Cycle filter (requires team context)
+    if (options.cycle) {
+      const teams = await client.teams()
+      const team = teams.nodes.find(
+        (t: { key: string }) => t.key.toLowerCase() === teamKey.toLowerCase(),
+      )
+      if (!team) {
+        throw new CliError(`team not found: "${teamKey}"`, 3, "check team key with: linear team list")
+      }
+      const cycles = await team.cycles()
+      const now = new Date()
+      let cycleId: string | undefined
+
+      if (options.cycle === "current") {
+        const current = cycles.nodes.find((c: { startsAt: Date; endsAt: Date }) =>
+          new Date(c.startsAt) <= now && now <= new Date(c.endsAt)
+        )
+        if (!current) {
+          throw new CliError("no active cycle found", 3, "list cycles with: linear cycle list --team " + teamKey)
+        }
+        cycleId = current.id
+      } else if (options.cycle === "next") {
+        const future = cycles.nodes
+          .filter((c: { startsAt: Date }) => new Date(c.startsAt) > now)
+          .sort((a: { startsAt: Date }, b: { startsAt: Date }) =>
+            new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
+          )
+        if (future.length === 0) {
+          throw new CliError("no upcoming cycle found", 3, "list cycles with: linear cycle list --team " + teamKey)
+        }
+        cycleId = future[0].id
+      } else {
+        const num = parseInt(options.cycle)
+        if (isNaN(num)) {
+          throw new CliError(
+            `invalid cycle "${options.cycle}"`,
+            4,
+            "--cycle current, --cycle next, or --cycle <number>",
+          )
+        }
+        const match = cycles.nodes.find((c: { number: number }) => c.number === num)
+        if (!match) {
+          throw new CliError(`cycle #${num} not found`, 3, "list cycles with: linear cycle list --team " + teamKey)
+        }
+        cycleId = match.id
+      }
+
+      filter.cycle = { id: { eq: cycleId } }
+    }
+
+    // Due date filter
+    if (options.due) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(options.due)) {
+        throw new CliError(
+          `invalid date "${options.due}"`,
+          4,
+          "--due YYYY-MM-DD",
+        )
+      }
+      filter.dueDate = { lte: options.due }
+    }
+
+    // Overdue filter (due date in the past)
+    if (options.overdue) {
+      const today = new Date().toISOString().slice(0, 10)
+      filter.dueDate = { ...(filter.dueDate ?? {}), lt: today }
     }
 
     // Normalize human-friendly sort values
