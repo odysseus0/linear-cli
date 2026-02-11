@@ -1,4 +1,5 @@
 import { Command } from "@cliffy/command"
+import { InitiativeStatus } from "@linear/sdk"
 import { createClient } from "../client.ts"
 import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
@@ -163,36 +164,35 @@ const createCommand = new Command()
 
     const content = options.description ?? await readStdin()
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {
-      name: options.name,
-    }
-
-    if (content) input.description = content
-    if (options.targetDate) input.targetDate = options.targetDate
+    // Resolve status enum
+    let status: InitiativeStatus | undefined
     if (options.status) {
-      // Normalize to InitiativeStatus enum values
-      const statusMap: Record<string, string> = {
-        planned: "Planned",
-        active: "Active",
-        completed: "Completed",
+      const statusMap: Record<string, InitiativeStatus> = {
+        planned: InitiativeStatus.Planned,
+        active: InitiativeStatus.Active,
+        completed: InitiativeStatus.Completed,
       }
-      const normalized = statusMap[options.status.toLowerCase()]
-      if (!normalized) {
+      status = statusMap[options.status.toLowerCase()]
+      if (!status) {
         throw new CliError(
           `invalid status "${options.status}"`,
           4,
           "use: planned, active, completed",
         )
       }
-      input.status = normalized
     }
 
-    if (options.owner) {
-      input.ownerId = await resolveUser(client, options.owner)
-    }
+    const ownerId = options.owner
+      ? await resolveUser(client, options.owner)
+      : undefined
 
-    const payload = await client.createInitiative(input)
+    const payload = await client.createInitiative({
+      name: options.name,
+      ...(content && { description: content }),
+      ...(options.targetDate && { targetDate: options.targetDate }),
+      ...(status && { status }),
+      ...(ownerId && { ownerId }),
+    })
     const initiative = await payload.initiative
 
     if (!initiative) {
@@ -229,34 +229,34 @@ const updateCommand = new Command()
 
     const initiative = await resolveInitiative(client, currentName)
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {}
-
-    if (options.name) input.name = options.name
-    if (options.description) input.description = options.description
-    if (options.targetDate) input.targetDate = options.targetDate
+    let status: InitiativeStatus | undefined
     if (options.status) {
-      const statusMap: Record<string, string> = {
-        planned: "Planned",
-        active: "Active",
-        completed: "Completed",
+      const statusMap: Record<string, InitiativeStatus> = {
+        planned: InitiativeStatus.Planned,
+        active: InitiativeStatus.Active,
+        completed: InitiativeStatus.Completed,
       }
-      const normalized = statusMap[options.status.toLowerCase()]
-      if (!normalized) {
+      status = statusMap[options.status.toLowerCase()]
+      if (!status) {
         throw new CliError(
           `invalid status "${options.status}"`,
           4,
           "use: planned, active, completed",
         )
       }
-      input.status = normalized
     }
 
-    if (options.owner) {
-      input.ownerId = await resolveUser(client, options.owner)
-    }
+    const ownerId = options.owner
+      ? await resolveUser(client, options.owner)
+      : undefined
 
-    await client.updateInitiative(initiative.id, input)
+    await client.updateInitiative(initiative.id, {
+      ...(options.name && { name: options.name }),
+      ...(options.description && { description: options.description }),
+      ...(options.targetDate && { targetDate: options.targetDate }),
+      ...(status && { status }),
+      ...(ownerId && { ownerId }),
+    })
 
     // Re-fetch and display updated initiative
     const updated = await client.initiative(initiative.id)
@@ -295,8 +295,9 @@ const startCommand = new Command()
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const initiative = await resolveInitiative(client, name)
-    // deno-lint-ignore no-explicit-any
-    await client.updateInitiative(initiative.id, { status: "Active" as any })
+    await client.updateInitiative(initiative.id, {
+      status: InitiativeStatus.Active,
+    })
     console.log(`${initiative.name} started`)
   })
 
@@ -308,8 +309,9 @@ const completeInitiativeCommand = new Command()
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const initiative = await resolveInitiative(client, name)
-    // deno-lint-ignore no-explicit-any
-    await client.updateInitiative(initiative.id, { status: "Completed" as any })
+    await client.updateInitiative(initiative.id, {
+      status: InitiativeStatus.Completed,
+    })
     console.log(`${initiative.name} completed`)
   })
 

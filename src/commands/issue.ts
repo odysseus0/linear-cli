@@ -1,5 +1,5 @@
 import { Command } from "@cliffy/command"
-import { PaginationOrderBy } from "@linear/sdk"
+import { type LinearClient, PaginationOrderBy } from "@linear/sdk"
 import { createClient } from "../client.ts"
 // Exit codes: 0 success, 1 runtime error, 2 auth error, 3 not found, 4 validation/usage
 import { CliError } from "../errors.ts"
@@ -88,10 +88,7 @@ const listCommand = new Command()
     const client = createClient(apiKey)
     const teamKey = requireTeam(options)
 
-    // deno-lint-ignore no-explicit-any
-    const filter: any = {
-      team: { key: { eq: teamKey } },
-    }
+    // --- Resolve all filter values ---
 
     // State filter (--status is hidden alias for --state)
     const states = options.state ?? options.status
@@ -101,44 +98,28 @@ const listCommand = new Command()
       ? undefined
       : DEFAULT_ACTIVE_STATES
 
-    if (stateTypes) {
-      filter.state = { type: { in: stateTypes } }
-    }
-
     // --mine is shorthand for --assignee me (--assignee wins if both set)
-    if (options.mine && !options.assignee) {
-      options.assignee = "me"
-    }
-
-    // Assignee filter
-    if (options.assignee) {
-      const userId = await resolveUser(client, options.assignee)
-      filter.assignee = { id: { eq: userId } }
-    } else if (options.unassigned) {
-      filter.assignee = { null: true }
-    }
+    const assigneeName = options.assignee ?? (options.mine ? "me" : undefined)
+    const userId = assigneeName
+      ? await resolveUser(client, assigneeName)
+      : undefined
 
     // Label filter (AND semantics — all must match)
-    if (options.label?.length) {
-      const teamId = await resolveTeamId(client, teamKey)
-      const labelIds = await Promise.all(
+    const teamId = (options.label?.length || options.cycle)
+      ? await resolveTeamId(client, teamKey)
+      : undefined
+    const labelIds = options.label?.length && teamId
+      ? await Promise.all(
         options.label.map((l: string) => resolveLabel(client, teamId, l)),
       )
-      filter.labels = { id: { in: labelIds } }
-    }
+      : undefined
 
-    // Project filter
-    if (options.project) {
-      const projectId = await resolveProject(client, options.project)
-      filter.project = { id: { eq: projectId } }
-    }
+    const projectId = options.project
+      ? await resolveProject(client, options.project)
+      : undefined
 
-    // Priority filter
-    if (options.priority) {
-      filter.priority = { eq: resolvePriority(options.priority) }
-    }
-
-    // Cycle filter (requires team context)
+    // Cycle resolution (requires team → cycles)
+    let cycleId: string | undefined
     if (options.cycle) {
       const teams = await client.teams()
       const team = teams.nodes.find(
@@ -149,7 +130,6 @@ const listCommand = new Command()
       }
       const cycles = await team.cycles()
       const now = new Date()
-      let cycleId: string | undefined
 
       if (options.cycle === "current") {
         const current = cycles.nodes.find((c: { startsAt: Date; endsAt: Date }) =>
@@ -184,26 +164,30 @@ const listCommand = new Command()
         }
         cycleId = match.id
       }
-
-      filter.cycle = { id: { eq: cycleId } }
     }
 
-    // Due date filter
-    if (options.due) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(options.due)) {
-        throw new CliError(
-          `invalid date "${options.due}"`,
-          4,
-          "--due YYYY-MM-DD",
-        )
+    // Due date (--due and --overdue can combine)
+    if (options.due && !/^\d{4}-\d{2}-\d{2}$/.test(options.due)) {
+      throw new CliError(`invalid date "${options.due}"`, 4, "--due YYYY-MM-DD")
+    }
+    const dueDate = (options.due || options.overdue)
+      ? {
+        ...(options.due && { lte: options.due }),
+        ...(options.overdue && { lt: new Date().toISOString().slice(0, 10) }),
       }
-      filter.dueDate = { lte: options.due }
-    }
+      : undefined
 
-    // Overdue filter (due date in the past)
-    if (options.overdue) {
-      const today = new Date().toISOString().slice(0, 10)
-      filter.dueDate = { ...(filter.dueDate ?? {}), lt: today }
+    // --- Build filter ---
+    const filter = {
+      team: { key: { eq: teamKey } },
+      ...(stateTypes && { state: { type: { in: stateTypes } } }),
+      ...(userId && { assignee: { id: { eq: userId } } }),
+      ...(options.unassigned && !assigneeName && { assignee: { null: true } }),
+      ...(labelIds && { labels: { id: { in: labelIds } } }),
+      ...(projectId && { project: { id: { eq: projectId } } }),
+      ...(options.priority && { priority: { eq: resolvePriority(options.priority) } }),
+      ...(cycleId && { cycle: { id: { eq: cycleId } } }),
+      ...(dueDate && { dueDate }),
     }
 
     // Normalize human-friendly sort values
@@ -346,28 +330,28 @@ const viewCommand = new Command()
         // Find the last response activity (the summary/result)
         const responseActivity = activities.nodes.find(
           (a) =>
-            // deno-lint-ignore no-explicit-any
-            (a.content as any)?.__typename ===
-              "AgentActivityResponseContent",
+            a.content.__typename === "AgentActivityResponseContent",
         )
+        const summary =
+          responseActivity?.content.__typename ===
+              "AgentActivityResponseContent"
+            ? responseActivity.content.body
+            : null
         sessions.push({
           agent: appUser?.name ?? "Unknown",
           status: session.status,
           createdAt: session.createdAt,
-          // deno-lint-ignore no-explicit-any
-          summary: (responseActivity?.content as any)?.body ?? null,
+          summary,
+          // externalUrls is typed as Record<string, unknown> in SDK but is actually { url: string }[]
           externalUrl: session.externalLinks?.[0]?.url ??
-            // deno-lint-ignore no-explicit-any
-            (session.externalUrls as any)?.[0]?.url ?? null,
+            (session.externalUrls as unknown as { url?: string }[] | undefined)?.[0]?.url ?? null,
           activities: (options as { verbose?: boolean }).verbose
             ? activities.nodes.map((a) => ({
-              // deno-lint-ignore no-explicit-any
-              type: (a.content as any)?.__typename
-                ?.replace("AgentActivity", "")
+              type: a.content.__typename
+                .replace("AgentActivity", "")
                 .replace("Content", "")
-                .toLowerCase() ?? "unknown",
-              // deno-lint-ignore no-explicit-any
-              body: (a.content as any)?.body ?? "",
+                .toLowerCase(),
+              body: "body" in a.content ? a.content.body : "",
               ephemeral: a.ephemeral,
               createdAt: a.createdAt,
             }))
@@ -550,41 +534,42 @@ const createCommand = new Command()
     // Description: flag → stdin → undefined
     const description = options.description ?? (await readStdin())
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {
-      teamId,
-      title: options.title,
-    }
-
-    if (description) input.description = description
-    if (options.priority) input.priority = resolvePriority(options.priority)
-
-    if (options.assignee) {
-      input.assigneeId = await resolveUser(client, options.assignee)
-    }
+    // Resolve all async values before building input
     const stateName = options.state ?? options.status
-    if (stateName) {
-      input.stateId = await resolveState(client, teamId, stateName)
-    }
+    const assigneeId = options.assignee
+      ? await resolveUser(client, options.assignee)
+      : undefined
+    const stateId = stateName
+      ? await resolveState(client, teamId, stateName)
+      : undefined
     const labelNames = options.label?.length
       ? options.label
       : options.type
       ? [options.type]
       : undefined
-    if (labelNames?.length) {
-      input.labelIds = await Promise.all(
+    const labelIds = labelNames?.length
+      ? await Promise.all(
         labelNames.map((l: string) => resolveLabel(client, teamId, l)),
       )
-    }
-    if (options.project) {
-      input.projectId = await resolveProject(client, options.project)
-    }
-    if (options.parent) {
-      const parentIssue = await resolveIssue(client, options.parent, teamKey)
-      input.parentId = parentIssue.id
-    }
+      : undefined
+    const projectId = options.project
+      ? await resolveProject(client, options.project)
+      : undefined
+    const parentId = options.parent
+      ? (await resolveIssue(client, options.parent, teamKey)).id
+      : undefined
 
-    const payload = await client.createIssue(input)
+    const payload = await client.createIssue({
+      teamId,
+      title: options.title,
+      ...(description && { description }),
+      ...(options.priority && { priority: resolvePriority(options.priority) }),
+      ...(assigneeId && { assigneeId }),
+      ...(stateId && { stateId }),
+      ...(labelIds && { labelIds }),
+      ...(projectId && { projectId }),
+      ...(parentId && { parentId }),
+    })
     const issue = await payload.issue
 
     if (!issue) {
@@ -636,90 +621,72 @@ const updateCommand = new Command()
 
     const issue = await resolveIssue(client, id, teamKey)
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {}
-
-    if (options.title) input.title = options.title
-
-    // Description: flag → stdin
+    // Resolve all async values before building input
     const description = options.description ?? (await readStdin())
-    if (description !== undefined) input.description = description
 
-    if (options.priority) input.priority = resolvePriority(options.priority)
-
-    if (options.assignee !== undefined) {
-      if (options.assignee === "") {
-        input.assigneeId = null
-      } else {
-        input.assigneeId = await resolveUser(client, options.assignee)
-      }
-    }
+    const assigneeId = options.assignee !== undefined
+      ? (options.assignee === "" ? null : await resolveUser(client, options.assignee))
+      : undefined
 
     const stateName = options.state ?? options.status
+    let stateId: string | undefined
     if (stateName) {
       const state = await issue.state
       const team = await state?.team
-      const teamId = team?.id
-      if (teamId) {
-        input.stateId = await resolveState(client, teamId, stateName)
+      if (team?.id) {
+        stateId = await resolveState(client, team.id, stateName)
       }
     }
 
-    // Label operations
-    if (options.label?.length) {
-      // Replace all labels
+    // Resolve labels (replace-all or delta)
+    let labelIds: string[] | undefined
+    const issueTeamId = async () => {
       const state = await issue.state
       const team = await state?.team
-      const teamId = team?.id ?? ""
-      input.labelIds = await Promise.all(
-        options.label.map((l: string) => resolveLabel(client, teamId, l)),
+      return team?.id ?? ""
+    }
+    if (options.label?.length) {
+      const tid = await issueTeamId()
+      labelIds = await Promise.all(
+        options.label.map((l: string) => resolveLabel(client, tid, l)),
       )
     } else if (options.addLabel?.length || options.removeLabel?.length) {
-      // Delta label update
       const currentLabels = await issue.labels()
-      const currentIds = currentLabels.nodes.map(
-        (l: { id: string }) => l.id,
-      )
-
-      const state = await issue.state
-      const team = await state?.team
-      const teamId = team?.id ?? ""
-
-      let labelIds = [...currentIds]
-
+      const currentIds = currentLabels.nodes.map((l: { id: string }) => l.id)
+      const tid = await issueTeamId()
+      let ids = [...currentIds]
       if (options.addLabel?.length) {
         const addIds = await Promise.all(
-          options.addLabel.map((l: string) => resolveLabel(client, teamId, l)),
+          options.addLabel.map((l: string) => resolveLabel(client, tid, l)),
         )
-        labelIds = [...new Set([...labelIds, ...addIds])]
+        ids = [...new Set([...ids, ...addIds])]
       }
-
       if (options.removeLabel?.length) {
         const removeIds = await Promise.all(
-          options.removeLabel.map((l: string) =>
-            resolveLabel(client, teamId, l)
-          ),
+          options.removeLabel.map((l: string) => resolveLabel(client, tid, l)),
         )
-        labelIds = labelIds.filter((id) => !removeIds.includes(id))
+        ids = ids.filter((id) => !removeIds.includes(id))
       }
-
-      input.labelIds = labelIds
+      labelIds = ids
     }
 
-    if (options.project) {
-      input.projectId = await resolveProject(client, options.project)
-    }
+    const projectId = options.project
+      ? await resolveProject(client, options.project)
+      : undefined
+    const parentId = options.parent
+      ? (await resolveIssue(client, options.parent, teamKey)).id
+      : undefined
 
-    if (options.parent) {
-      const parentIssue = await resolveIssue(
-        client,
-        options.parent,
-        teamKey,
-      )
-      input.parentId = parentIssue.id
-    }
-
-    await client.updateIssue(issue.id, input)
+    await client.updateIssue(issue.id, {
+      ...(options.title && { title: options.title }),
+      ...(description !== undefined && { description }),
+      ...(options.priority && { priority: resolvePriority(options.priority) }),
+      ...(assigneeId !== undefined && { assigneeId }),
+      ...(stateId && { stateId }),
+      ...(labelIds && { labelIds }),
+      ...(projectId && { projectId }),
+      ...(parentId && { parentId }),
+    })
 
     // Re-fetch and display updated issue
     const updated = await client.issue(issue.id)
@@ -1045,8 +1012,7 @@ const TERMINAL_SESSION_STATES = new Set(["complete", "error", "awaitingInput"])
 
 /** Find the latest agent session for an issue. Returns null if none. */
 async function getLatestSession(
-  // deno-lint-ignore no-explicit-any
-  client: any,
+  client: LinearClient,
   issueId: string,
 ) {
   const allSessions = await client.agentSessions()
@@ -1106,20 +1072,23 @@ const watchCommand = new Command()
         const appUser = await session.appUser
         const activities = await session.activities()
         const responseActivity = activities.nodes.find(
-          // deno-lint-ignore no-explicit-any
-          (a: any) =>
-            a.content?.__typename === "AgentActivityResponseContent",
+          (a) =>
+            a.content.__typename === "AgentActivityResponseContent",
         )
+        const summary =
+          responseActivity?.content.__typename ===
+              "AgentActivityResponseContent"
+            ? responseActivity.content.body
+            : null
 
         const result = {
           issue: issue.identifier,
           agent: appUser?.name ?? "Unknown",
           status: session.status,
-          // deno-lint-ignore no-explicit-any
-          summary: (responseActivity?.content as any)?.body ?? null,
+          summary,
+          // externalUrls is typed as Record<string, unknown> in SDK but is actually { url: string }[]
           externalUrl: session.externalLinks?.[0]?.url ??
-            // deno-lint-ignore no-explicit-any
-            (session.externalUrls as any)?.[0]?.url ?? null,
+            (session.externalUrls as unknown as { url?: string }[] | undefined)?.[0]?.url ?? null,
           elapsed: Math.round((Date.now() - start) / 1000),
         }
 

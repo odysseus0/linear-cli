@@ -40,11 +40,9 @@ export const inboxCommand = new Command()
     // Resolve all notifications
     const resolved = await Promise.all(
       items.map(async (n) => {
-        // deno-lint-ignore no-explicit-any
-        const nAny = n as any
-        const issue = nAny.issue ? await nAny.issue : null
-        const actor = nAny.actor ? await nAny.actor : null
-        const comment = nAny.comment ? await nAny.comment : null
+        const issue = "issue" in n ? await n.issue : null
+        const actor = "actor" in n ? await n.actor : null
+        const comment = "comment" in n ? await n.comment : null
 
         // Build a content summary from whatever we have
         const summary = buildSummary(n.type, actor?.name, comment?.body)
