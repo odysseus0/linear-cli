@@ -27,6 +27,7 @@ interface ResolveOpts<T> {
  *   1. Exact match on primary key (case-insensitive)
  *   2. Exact match on any alt key (case-insensitive)
  *   3. Unique substring match on primary key
+ *   3b. Unique substring match on alt keys
  *   4. Ambiguous → error listing candidates
  *   5. Not found → error listing all available
  */
@@ -53,8 +54,20 @@ function resolve<T>(opts: ResolveOpts<T>): T {
     key(item).toLowerCase().includes(lower)
   )
   if (partial.length === 1) return partial[0]
-  if (partial.length > 1) {
-    const candidates = partial.map((p) => fmt(p)).join(", ")
+
+  // 3b. Substring match on alt keys
+  let combined = partial
+  if (altKeys) {
+    const altPartial = items.filter((item) =>
+      !partial.includes(item) &&
+      altKeys(item).some((k) => k.toLowerCase().includes(lower))
+    )
+    combined = [...partial, ...altPartial]
+    if (combined.length === 1) return combined[0]
+  }
+
+  if (combined.length > 1) {
+    const candidates = combined.map((p) => fmt(p)).join(", ")
     throw new CliError(
       `ambiguous ${entity} "${input}"`,
       4,

@@ -230,6 +230,7 @@ const viewCommand = new Command()
           }
         }),
       )
+      const branchName = await issue.branchName
       renderJson({
         id: issue.identifier,
         title: issue.title,
@@ -242,6 +243,7 @@ const viewCommand = new Command()
         createdAt: issue.createdAt,
         updatedAt: issue.updatedAt,
         url: issue.url,
+        branchName: branchName ?? null,
         description: issue.description ?? null,
         comments: commentData,
       })
@@ -325,6 +327,7 @@ const createCommand = new Command()
     "Priority: urgent, high, medium, low, none (or 0-4)",
   )
   .option("-l, --label <name:string>", "Label name", { collect: true })
+  .option("--type <type:string>", "Alias for --label", { hidden: true })
   .option("-p, --project <name:string>", "Project name")
   .option("--parent <id:string>", "Parent issue identifier")
   .action(async (options) => {
@@ -353,9 +356,14 @@ const createCommand = new Command()
     if (stateName) {
       input.stateId = await resolveState(client, teamId, stateName)
     }
-    if (options.label?.length) {
+    const labelNames = options.label?.length
+      ? options.label
+      : options.type
+        ? [options.type]
+        : undefined
+    if (labelNames?.length) {
       input.labelIds = await Promise.all(
-        options.label.map((l: string) => resolveLabel(client, teamId, l)),
+        labelNames.map((l: string) => resolveLabel(client, teamId, l)),
       )
     }
     if (options.project) {
