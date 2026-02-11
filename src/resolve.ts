@@ -18,6 +18,8 @@ interface ResolveOpts<T> {
   entity: string
   /** Format a candidate for disambiguation display. Defaults to key(). */
   display?: (item: T) => string
+  /** Optional pre-filter to exclude candidates before matching (e.g., skip already-canceled projects). */
+  filter?: (item: T) => boolean
 }
 
 /**
@@ -32,7 +34,8 @@ interface ResolveOpts<T> {
  *   5. Not found → error listing all available
  */
 function resolve<T>(opts: ResolveOpts<T>): T {
-  const { items, input, key, altKeys, entity, display } = opts
+  const { items: rawItems, input, key, altKeys, entity, display, filter } = opts
+  const items = filter ? rawItems.filter(filter) : rawItems
   const lower = input.toLowerCase()
   const fmt = display ?? key
 
@@ -183,6 +186,7 @@ export async function resolveProject(
 export async function resolveProjectByName(
   client: LinearClient,
   name: string,
+  filter?: (p: { state?: string }) => boolean,
 ) {
   const projects = await client.projects()
   return resolve({
@@ -190,6 +194,7 @@ export async function resolveProjectByName(
     input: name,
     key: (p) => p.name,
     entity: "project",
+    filter,
   })
 }
 
