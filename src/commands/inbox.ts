@@ -11,6 +11,7 @@ interface InboxItem {
   actor: string
   issue: string
   title: string
+  summary: string
   read: boolean
   count: number
   createdAt: string | Date
@@ -43,11 +44,17 @@ export const inboxCommand = new Command()
         const nAny = n as any
         const issue = nAny.issue ? await nAny.issue : null
         const actor = nAny.actor ? await nAny.actor : null
+        const comment = nAny.comment ? await nAny.comment : null
+
+        // Build a content summary from whatever we have
+        const summary = buildSummary(n.type, actor?.name, comment?.body)
+
         return {
-          type: formatType(n.type),
+          type: n.type,
           actor: actor?.name ?? "-",
           issue: issue?.identifier ?? "-",
           title: issue?.title ?? "-",
+          summary,
           read: !!n.readAt,
           createdAt: n.createdAt,
         }
@@ -59,7 +66,6 @@ export const inboxCommand = new Command()
     if (options.all) {
       rows = resolved.map((r) => ({ ...r, count: 1 }))
     } else {
-      // Group by issue, keep latest per issue
       const grouped = new Map<string, InboxItem>()
       for (const r of resolved) {
         const existing = grouped.get(r.issue)
@@ -67,12 +73,12 @@ export const inboxCommand = new Command()
           grouped.set(r.issue, { ...r, count: 1 })
         } else {
           existing.count++
-          // Keep the latest type/actor and unread if any are unread
           if (
             new Date(r.createdAt) > new Date(existing.createdAt)
           ) {
             existing.type = r.type
             existing.actor = r.actor
+            existing.summary = r.summary
             existing.createdAt = r.createdAt
           }
           if (!r.read) existing.read = false
@@ -92,22 +98,49 @@ export const inboxCommand = new Command()
     }
 
     render(format, {
-      headers: ["", "Issue", "Title", "Latest", "Actor", "When"],
-      rows: rows.map((r) => [
-        r.read ? " " : "●",
-        r.issue,
-        r.title.length > 45 ? r.title.slice(0, 42) + "..." : r.title,
-        r.type + (r.count > 1 ? ` (${r.count})` : ""),
-        r.actor,
-        relativeTime(r.createdAt),
-      ]),
+      headers: ["", "Issue", "Title", "Summary", "When"],
+      rows: rows.map((r) => {
+        const countSuffix = r.count > 1 ? ` (+${r.count - 1})` : ""
+        return [
+          r.read ? " " : "●",
+          r.issue,
+          truncate(r.title, 35),
+          truncate(r.summary, 50) + countSuffix,
+          relativeTime(r.createdAt),
+        ]
+      }),
     })
   })
 
-function formatType(type: string): string {
-  return type
+/** Build a human-readable summary line from notification data. */
+function buildSummary(
+  type: string,
+  actorName: string | undefined,
+  commentBody: string | undefined,
+): string {
+  const actor = actorName ?? "Someone"
+
+  if (commentBody) {
+    // Strip markdown, collapse whitespace, take first line
+    const clean = commentBody
+      .replace(/^#{1,3}\s+/gm, "")
+      .replace(/\*\*/g, "")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\n/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+    return `${actor}: ${clean}`
+  }
+
+  // Fallback to formatted type
+  const action = type
     .replace(/^issue/, "")
     .replace(/([A-Z])/g, " $1")
     .trim()
     .toLowerCase()
+  return `${actor} — ${action}`
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + "…" : s
 }
