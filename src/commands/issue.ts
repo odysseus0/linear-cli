@@ -1,6 +1,7 @@
 import { Command } from "@cliffy/command"
 import { PaginationOrderBy } from "@linear/sdk"
 import { createClient } from "../client.ts"
+// Exit codes: 0 success, 1 runtime error, 2 auth error, 3 not found, 4 validation/usage
 import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
 import { getFormat } from "../types.ts"
@@ -66,7 +67,7 @@ const listCommand = new Command()
   .option("-U, --unassigned", "Show only unassigned")
   .option("-l, --label <name:string>", "Filter by label", { collect: true })
   .option("-p, --project <name:string>", "Filter by project")
-  .option("--sort <field:string>", "Sort: updatedAt, createdAt, priority", {
+  .option("--sort <field:string>", "Sort: updated, created, priority", {
     default: "updatedAt",
   })
   .option("--limit <n:integer>", "Max results", { default: 50 })
@@ -125,10 +126,17 @@ const listCommand = new Command()
       filter.project = { id: { eq: projectId } }
     }
 
+    // Normalize human-friendly sort values
+    const sortMap: Record<string, string> = { updated: "updatedAt", created: "createdAt" }
+    const sortField = sortMap[options.sort] ?? options.sort
+
     // Order
-    const orderBy = options.sort === "createdAt"
+    const orderBy = sortField === "createdAt"
       ? PaginationOrderBy.CreatedAt
       : PaginationOrderBy.UpdatedAt
+
+    // V16: progress indication for slow list fetch
+    if (Deno.stderr.isTerminal()) Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
 
     const issues = await client.issues({
       filter,
@@ -949,6 +957,144 @@ const assignCommand = new Command()
     }
   })
 
+const TERMINAL_SESSION_STATES = new Set(["complete", "error", "awaitingInput"])
+
+/** Find the latest agent session for an issue. Returns null if none. */
+async function getLatestSession(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  issueId: string,
+) {
+  const allSessions = await client.agentSessions()
+  let latest = null
+  for (const session of allSessions.nodes) {
+    const sessionIssue = await session.issue
+    if (sessionIssue?.id === issueId) {
+      if (
+        !latest ||
+        new Date(session.createdAt) > new Date(latest.createdAt)
+      ) {
+        latest = session
+      }
+    }
+  }
+  return latest
+}
+
+const watchCommand = new Command()
+  .description("Watch issue until agent session completes")
+  .example(
+    "Watch until done",
+    "linear issue watch POL-7",
+  )
+  .example(
+    "Custom interval and timeout",
+    "linear issue watch POL-7 --interval 30 --timeout 600",
+  )
+  .arguments("<id:string>")
+  .option("--interval <seconds:number>", "Poll interval in seconds", {
+    default: 15,
+  })
+  .option("--timeout <seconds:number>", "Timeout in seconds (0 = no limit)", {
+    default: 0,
+  })
+  .action(async (options, id: string) => {
+    const format = getFormat(options)
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const teamKey = (options as unknown as GlobalOptions).team
+
+    const issue = await resolveIssue(client, id, teamKey)
+    const interval = (options.interval ?? 15) * 1000
+    const timeout = (options.timeout ?? 0) * 1000
+    const start = Date.now()
+
+    if (format === "table") {
+      console.error(
+        `Watching ${issue.identifier} for agent session completion...`,
+      )
+    }
+
+    while (true) {
+      const session = await getLatestSession(client, issue.id)
+
+      if (session && TERMINAL_SESSION_STATES.has(session.status)) {
+        const appUser = await session.appUser
+        const activities = await session.activities()
+        const responseActivity = activities.nodes.find(
+          // deno-lint-ignore no-explicit-any
+          (a: any) =>
+            a.content?.__typename === "AgentActivityResponseContent",
+        )
+
+        const result = {
+          issue: issue.identifier,
+          agent: appUser?.name ?? "Unknown",
+          status: session.status,
+          // deno-lint-ignore no-explicit-any
+          summary: (responseActivity?.content as any)?.body ?? null,
+          externalUrl: session.externalLinks?.[0]?.url ??
+            // deno-lint-ignore no-explicit-any
+            (session.externalUrls as any)?.[0]?.url ?? null,
+          elapsed: Math.round((Date.now() - start) / 1000),
+        }
+
+        if (format === "json") {
+          renderJson(result)
+        } else if (format === "compact") {
+          console.log(
+            `${result.issue}\t${result.agent}\t${result.status}\t${result.elapsed}s\t${result.summary?.replace(/\n/g, " ").slice(0, 200) ?? "-"}\t${result.externalUrl ?? "-"}`,
+          )
+        } else {
+          console.log(
+            `${result.issue}: ${result.agent} → ${result.status} (${result.elapsed}s)`,
+          )
+          if (result.summary) {
+            console.log(
+              renderMarkdown(result.summary, { indent: "  " }),
+            )
+          }
+          if (result.externalUrl) {
+            console.log(`  View task → ${result.externalUrl}`)
+          }
+        }
+
+        // Exit code based on status
+        if (session.status === "error") Deno.exit(1)
+        if (session.status === "awaitingInput") Deno.exit(2)
+        return // complete → exit 0
+      }
+
+      // Timeout check
+      if (timeout > 0 && Date.now() - start > timeout) {
+        const status = session ? session.status : "no session"
+        if (format === "json") {
+          renderJson({
+            issue: issue.identifier,
+            status: "timeout",
+            lastSessionStatus: status,
+            elapsed: Math.round((Date.now() - start) / 1000),
+          })
+        } else {
+          console.error(
+            `Timeout: ${issue.identifier} still ${status} after ${Math.round((Date.now() - start) / 1000)}s`,
+          )
+        }
+        Deno.exit(124)
+      }
+
+      // Status update on stderr (doesn't pollute output)
+      if (format === "table") {
+        const status = session ? session.status : "waiting for session"
+        console.error(
+          `  ${status} (${Math.round((Date.now() - start) / 1000)}s)`,
+        )
+      }
+
+      await new Promise((r) => setTimeout(r, interval))
+    }
+  })
+
 export const issueCommand = new Command()
   .description("Manage issues")
   .alias("issues")
@@ -963,3 +1109,4 @@ export const issueCommand = new Command()
   .command("reopen", reopenCommand)
   .command("start", startCommand)
   .command("assign", assignCommand)
+  .command("watch", watchCommand)
