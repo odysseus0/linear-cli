@@ -227,6 +227,8 @@ const viewCommand = new Command()
     const commentsConn = await issue.comments()
     const comments = commentsConn.nodes
 
+    const branchName = await issue.branchName
+
     if (format === "json") {
       const commentData = await Promise.all(
         comments.map(async (c) => {
@@ -238,7 +240,6 @@ const viewCommand = new Command()
           }
         }),
       )
-      const branchName = await issue.branchName
       renderJson({
         id: issue.identifier,
         title: issue.title,
@@ -271,6 +272,7 @@ const viewCommand = new Command()
         `created\t${new Date(issue.createdAt).toISOString()}`,
         `updated\t${new Date(issue.updatedAt).toISOString()}`,
         `url\t${issue.url}`,
+        `branch\t${branchName ?? "-"}`,
         `description\t${issue.description ?? "-"}`,
       ]
       console.log(lines.join("\n"))
@@ -303,6 +305,7 @@ const viewCommand = new Command()
           })`,
         },
         { label: "URL", value: issue.url },
+        { label: "Branch", value: branchName ?? "-" },
       ],
     })
 
@@ -749,6 +752,33 @@ const reopenCommand = new Command()
     console.log(`${issue.identifier} reopened (${unstarted.name})`)
   })
 
+const startCommand = new Command()
+  .description("Start issue (set to in-progress state)")
+  .arguments("<id:string>")
+  .action(async (options, id: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const teamKey = (options as unknown as GlobalOptions).team
+
+    const issue = await resolveIssue(client, id, teamKey)
+    const state = await issue.state
+    const team = await state?.team
+    if (!team) throw new CliError("cannot determine team for issue", 1)
+
+    const states = await team.states()
+    const started = states.nodes.find((s) => s.type === "started")
+    if (!started) {
+      throw new CliError(
+        "no started state found for team",
+        1,
+        "check team workflow settings in Linear",
+      )
+    }
+
+    await client.updateIssue(issue.id, { stateId: started.id })
+    console.log(`${issue.identifier} started (${started.name})`)
+  })
+
 const assignCommand = new Command()
   .description("Assign issue to user (defaults to me)")
   .arguments("<id:string> [user:string]")
@@ -790,4 +820,5 @@ export const issueCommand = new Command()
   .command("branch", branchCommand)
   .command("close", closeCommand)
   .command("reopen", reopenCommand)
+  .command("start", startCommand)
   .command("assign", assignCommand)
