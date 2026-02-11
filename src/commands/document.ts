@@ -1,5 +1,6 @@
 import { Command } from "@cliffy/command"
 import { createClient } from "../client.ts"
+import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
 import { getFormat } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
@@ -153,7 +154,7 @@ const createCommand = new Command()
     const doc = await payload.document
 
     if (!doc) {
-      throw new Error("failed to create document")
+      throw new CliError("failed to create document", 1)
     }
 
     if (format === "json") {

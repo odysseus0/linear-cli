@@ -73,5 +73,12 @@ export async function getAPIKey(workspace?: string): Promise<string> {
   if (target && data[target]) {
     return data[target] as string
   }
-  throw new CliError("not authenticated", 2, "run 'linear-cli auth login'")
+  throw new CliError("not authenticated", 2, "run 'linear auth login'")
+}
+
+/** Print security warning when --key flag is used (exposes secret in shell history). */
+export function warnKeyFlag(): void {
+  console.error(
+    "warning: --key exposes secret in shell history. Prefer: linear auth login",
+  )
 }

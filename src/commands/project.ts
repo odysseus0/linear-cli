@@ -230,7 +230,7 @@ const createCommand = new Command()
     const project = await payload.project
 
     if (!project) {
-      throw new Error("failed to create project")
+      throw new CliError("failed to create project", 1)
     }
 
     if (format === "json") {
@@ -303,7 +303,7 @@ const updateCommand = new Command()
     const updated = await payload.project
 
     if (!updated) {
-      throw new Error("failed to update project")
+      throw new CliError("failed to update project", 1)
     }
 
     const lead = await updated.lead
@@ -418,7 +418,7 @@ const milestoneCreateCommand = new Command()
     const milestone = await payload.projectMilestone
 
     if (!milestone) {
-      throw new Error("failed to create milestone")
+      throw new CliError("failed to create milestone", 1)
     }
 
     if (format === "json") {
@@ -486,7 +486,7 @@ const postCommand = new Command()
     const update = await payload.projectUpdate
 
     if (!update) {
-      throw new Error("failed to create project update")
+      throw new CliError("failed to create project update", 1)
     }
 
     if (format === "json") {
@@ -649,6 +649,8 @@ const addIssueCommand = new Command()
 export const projectCommand = new Command()
   .description("Manage projects")
   .alias("projects")
+  .example("List projects", "linear project list")
+  .example("View project", "linear project view 'My Project'")
   .command("list", listCommand)
   .command("view", viewCommand)
   .command("create", createCommand)

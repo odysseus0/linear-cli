@@ -1,5 +1,6 @@
 import { Command } from "@cliffy/command"
 import { createClient } from "../client.ts"
+import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
 import { getFormat } from "../types.ts"
 import { render } from "../output/formatter.ts"
@@ -21,7 +22,7 @@ const listCommand = new Command()
       (t) => t.key.toLowerCase() === teamKey.toLowerCase(),
     )
     if (!team) {
-      throw new Error(`team not found: "${teamKey}"`)
+      throw new CliError(`team not found: "${teamKey}"`, 3, "check team key with: linear team list")
     }
 
     const cycles = await team.cycles()
@@ -69,13 +70,13 @@ const viewCommand = new Command()
       (t) => t.key.toLowerCase() === teamKey.toLowerCase(),
     )
     if (!team) {
-      throw new Error(`team not found: "${teamKey}"`)
+      throw new CliError(`team not found: "${teamKey}"`, 3, "check team key with: linear team list")
     }
 
     const cycles = await team.cycles()
     const cycle = cycles.nodes.find((c) => c.number === number)
     if (!cycle) {
-      throw new Error(`cycle #${number} not found`)
+      throw new CliError(`cycle #${number} not found`, 3, "list cycles with: linear cycle list --team <key>")
     }
 
     const issues = await cycle.issues()

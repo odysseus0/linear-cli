@@ -135,7 +135,7 @@ const listCommand = new Command()
       ? PaginationOrderBy.CreatedAt
       : PaginationOrderBy.UpdatedAt
 
-    // V16: progress indication for slow list fetch
+    // Progress indication for slow list fetch
     if (Deno.stderr.isTerminal()) Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
 
     const issues = await client.issues({
@@ -164,7 +164,7 @@ const listCommand = new Command()
     )
 
     // Client-side priority sort if requested
-    if (options.sort === "priority") {
+    if (sortField === "priority") {
       rows.sort((a, b) => (a.priority ?? 5) - (b.priority ?? 5))
     }
 
@@ -508,7 +508,7 @@ const createCommand = new Command()
     const issue = await payload.issue
 
     if (!issue) {
-      throw new Error("failed to create issue")
+      throw new CliError("failed to create issue", 1)
     }
 
     if (format === "json") {
@@ -678,7 +678,9 @@ const updateCommand = new Command()
 const deleteCommand = new Command()
   .description("Delete (archive) issue")
   .example("Delete an issue", "linear issue delete POL-5")
+  .example("Delete without confirmation", "linear issue delete POL-5 --yes")
   .arguments("<id:string>")
+  .option("-y, --yes", "Skip confirmation prompt")
   .action(async (options, id: string) => {
     const format = getFormat(options)
     const apiKey = await getAPIKey()
@@ -687,8 +689,10 @@ const deleteCommand = new Command()
 
     const issue = await resolveIssue(client, id, teamKey)
 
-    // Confirm if interactive
-    if (Deno.stdin.isTerminal()) {
+    // Skip confirmation if --yes or --no-input
+    const skipConfirm = (options as { yes?: boolean }).yes ||
+      (options as unknown as GlobalOptions).noInput
+    if (!skipConfirm && Deno.stdin.isTerminal()) {
       const buf = new Uint8Array(10)
       const encoder = new TextEncoder()
       await Deno.stdout.write(
@@ -1098,6 +1102,9 @@ const watchCommand = new Command()
 export const issueCommand = new Command()
   .description("Manage issues")
   .alias("issues")
+  .example("List issues", "linear issue list --team POL")
+  .example("View issue", "linear issue view POL-5")
+  .example("Close issue", "linear issue close POL-5")
   .command("list", listCommand)
   .command("view", viewCommand)
   .command("create", createCommand)

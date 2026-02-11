@@ -1,5 +1,6 @@
 import { Command } from "@cliffy/command"
 import { createClient } from "../client.ts"
+import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
 import { getFormat } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
@@ -7,6 +8,7 @@ import { renderJson } from "../output/json.ts"
 import { readStdin, resolveInitiative, resolveUser } from "../resolve.ts"
 import { formatDate, relativeTime } from "../time.ts"
 
+// Linear API uses "status" for initiatives (vs "state" for issues)
 const listCommand = new Command()
   .description("List initiatives")
   .example("List all initiatives", "linear initiative list")
@@ -169,8 +171,10 @@ const createCommand = new Command()
       }
       const normalized = statusMap[options.status.toLowerCase()]
       if (!normalized) {
-        throw new Error(
-          `invalid status "${options.status}" (use: planned, active, completed)`,
+        throw new CliError(
+          `invalid status "${options.status}"`,
+          4,
+          "use: planned, active, completed",
         )
       }
       input.status = normalized
@@ -184,7 +188,7 @@ const createCommand = new Command()
     const initiative = await payload.initiative
 
     if (!initiative) {
-      throw new Error("failed to create initiative")
+      throw new CliError("failed to create initiative", 1)
     }
 
     if (format === "json") {
@@ -231,8 +235,10 @@ const updateCommand = new Command()
       }
       const normalized = statusMap[options.status.toLowerCase()]
       if (!normalized) {
-        throw new Error(
-          `invalid status "${options.status}" (use: planned, active, completed)`,
+        throw new CliError(
+          `invalid status "${options.status}"`,
+          4,
+          "use: planned, active, completed",
         )
       }
       input.status = normalized

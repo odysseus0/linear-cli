@@ -1,7 +1,7 @@
 import { Command } from "@cliffy/command"
 import { Input } from "@cliffy/prompt"
 import { createClient } from "../client.ts"
-import { getAPIKey, removeCredentials, saveCredentials } from "../auth.ts"
+import { getAPIKey, removeCredentials, saveCredentials, warnKeyFlag } from "../auth.ts"
 import { CliError } from "../errors.ts"
 import { getFormat } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
@@ -45,6 +45,7 @@ export const authCommand = new Command()
       .description("Authenticate with Linear")
       .option("--key <key:string>", "API key")
       .action(async (options) => {
+        if (options.key) warnKeyFlag()
         const format = getFormat(options)
         const envKey = Deno.env.get("LINEAR_API_KEY")
         const apiKey = options.key ?? envKey ??

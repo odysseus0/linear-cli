@@ -4,6 +4,7 @@ export interface GlobalOptions {
   format?: string
   team?: string
   json?: boolean
+  noInput?: boolean
 }
 
 /** Extract format from Cliffy's untyped options. Single cast, one place. */

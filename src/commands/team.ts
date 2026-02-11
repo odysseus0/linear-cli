@@ -40,6 +40,8 @@ async function findTeam(apiKey: string, key: string) {
 export const teamCommand = new Command()
   .description("Manage teams")
   .alias("teams")
+  .example("List teams", "linear team list")
+  .example("View team", "linear team view POL")
   .command(
     "list",
     new Command()
@@ -152,6 +154,9 @@ export const teamCommand = new Command()
         const client = createClient(apiKey)
 
         const target = await findTeam(apiKey, teamKey)
+
+        // Progress indication for slow overview fetch
+        if (Deno.stderr.isTerminal()) Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
 
         // Fetch all active issues for the team
         const issues = await client.issues({
