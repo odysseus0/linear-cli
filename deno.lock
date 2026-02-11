@@ -2,6 +2,7 @@
   "version": "5",
   "specifiers": {
     "jsr:@cliffy/ansi@1.0.0-rc.8": "1.0.0-rc.8",
+    "jsr:@cliffy/ansi@^1.0.0-rc.8": "1.0.0-rc.8",
     "jsr:@cliffy/command@^1.0.0-rc.8": "1.0.0-rc.8",
     "jsr:@cliffy/flags@1.0.0-rc.8": "1.0.0-rc.8",
     "jsr:@cliffy/internal@1.0.0-rc.8": "1.0.0-rc.8",
@@ -22,7 +23,7 @@
     "jsr:@std/path@~1.0.6": "1.0.9",
     "jsr:@std/text@~1.0.7": "1.0.17",
     "jsr:@std/toml@*": "1.0.11",
-    "npm:@linear/sdk@*": "74.0.0",
+    "npm:@linear/sdk@75": "75.0.0",
     "npm:marked-terminal@*": "7.3.0_marked@17.0.1",
     "npm:marked@*": "17.0.1"
   },
@@ -32,6 +33,7 @@
       "dependencies": [
         "jsr:@cliffy/internal",
         "jsr:@std/encoding",
+        "jsr:@std/fmt@~1.0.2",
         "jsr:@std/io"
       ]
     },
@@ -60,7 +62,7 @@
     "@cliffy/prompt@1.0.0-rc.8": {
       "integrity": "eba403ea1d47b9971bf2210fa35f4dc7ebd2aba87beec9540ae47552806e2f25",
       "dependencies": [
-        "jsr:@cliffy/ansi",
+        "jsr:@cliffy/ansi@1.0.0-rc.8",
         "jsr:@cliffy/internal",
         "jsr:@cliffy/keycode",
         "jsr:@std/assert",
@@ -130,8 +132,8 @@
         "graphql"
       ]
     },
-    "@linear/sdk@74.0.0": {
-      "integrity": "sha512-u2lgdyYLy/dJ4ttZ4W0f5bT5BFMQCR5872RcQKHpKn5/cNYiIyu4dTr0V3tjgB+Cyp4Ic0e44sp3CSQzA6hYJA==",
+    "@linear/sdk@75.0.0": {
+      "integrity": "sha512-gf/xmbiWc4cLHjoeOGCNVTglpy+M+ENHpP3bvU57wxD17s7j8zJGXp4wOStnRcQYR0FT+n/76fPp+XR3ZtEjDw==",
       "dependencies": [
         "@graphql-typed-document-node/core"
       ]
@@ -375,7 +377,7 @@
       "jsr:@std/fs@*",
       "jsr:@std/path@*",
       "jsr:@std/toml@*",
-      "npm:@linear/sdk@*"
+      "npm:@linear/sdk@75"
     ]
   }
 }
