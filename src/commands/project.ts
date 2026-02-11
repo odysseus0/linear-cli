@@ -552,6 +552,48 @@ const labelsCommand = new Command()
     }
   })
 
+const deleteCommand = new Command()
+  .description("Delete project")
+  .example("Delete a project", "linear project delete 'My Project'")
+  .example("Delete without confirmation", "linear project delete 'My Project' --yes")
+  .arguments("<name:string>")
+  .option("-y, --yes", "Skip confirmation prompt")
+  .action(async (options, name: string) => {
+    const format = getFormat(options)
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+
+    const project = await resolveProjectByName(client, name)
+
+    // Skip confirmation if --yes or --no-input
+    const skipConfirm = (options as { yes?: boolean }).yes ||
+      (options as unknown as GlobalOptions).noInput
+    if (!skipConfirm && Deno.stdin.isTerminal()) {
+      const buf = new Uint8Array(10)
+      const encoder = new TextEncoder()
+      await Deno.stdout.write(
+        encoder.encode(
+          `Delete project "${project.name}"? [y/N] `,
+        ),
+      )
+      const n = await Deno.stdin.read(buf)
+      const answer = new TextDecoder().decode(buf.subarray(0, n ?? 0)).trim()
+      if (answer.toLowerCase() !== "y") {
+        renderMessage(format, "Canceled")
+        return
+      }
+    }
+
+    await client.deleteProject(project.id)
+
+    if (format === "json") {
+      renderJson({ name: project.name, deleted: true })
+      return
+    }
+
+    renderMessage(format, `Deleted project: ${project.name}`)
+  })
+
 // --- Porcelain: state transitions ---
 
 /** Find project status ID by type (started, paused, completed, canceled). */
@@ -662,4 +704,5 @@ export const projectCommand = new Command()
   .command("pause", pauseCommand)
   .command("complete", completeCommand)
   .command("cancel", cancelCommand)
+  .command("delete", deleteCommand)
   .command("add-issue", addIssueCommand)
