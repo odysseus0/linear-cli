@@ -1,4 +1,5 @@
 import { Command, ValidationError } from "@cliffy/command"
+import { CompletionsCommand } from "@cliffy/command/completions"
 import { CliError } from "./errors.ts"
 import type { Format } from "./output/formatter.ts"
 import { authCommand } from "./commands/auth.ts"
@@ -9,6 +10,7 @@ import { cycleCommand } from "./commands/cycle.ts"
 import { userCommand } from "./commands/user.ts"
 import { documentCommand } from "./commands/document.ts"
 import { initiativeCommand } from "./commands/initiative.ts"
+import { inboxCommand } from "./commands/inbox.ts"
 import { buildIndex, suggestCommand } from "./suggest.ts"
 import { createClient } from "./client.ts"
 import { getAPIKey } from "./auth.ts"
@@ -17,6 +19,24 @@ import { render } from "./output/formatter.ts"
 import { renderJson } from "./output/json.ts"
 import denoConfig from "../deno.json" with { type: "json" }
 
+/** Set NO_COLOR env var so Deno.noColor and @std/fmt/colors strip ANSI. */
+function disableColor(): void {
+  Deno.env.set("NO_COLOR", "1")
+}
+
+// Strip ANSI codes when output is piped or terminal is dumb
+if (!Deno.stdout.isTerminal() || Deno.env.get("TERM") === "dumb") {
+  disableColor()
+}
+
+// Handle --no-color flag before Cliffy parses args
+const rawArgs = [...Deno.args]
+const noColorIdx = rawArgs.indexOf("--no-color")
+if (noColorIdx !== -1) {
+  disableColor()
+  rawArgs.splice(noColorIdx, 1)
+}
+
 const DEFAULT_FORMAT: Format = Deno.stdout.isTerminal() ? "table" : "compact"
 
 const app = new Command()
@@ -24,6 +44,8 @@ const app = new Command()
   .version(denoConfig.version)
   .throwErrors()
   .description("Agent-native Linear CLI")
+  .meta("Repository", "https://github.com/odysseus0/linear-cli")
+  .meta("Exit codes", "0 success, 1 runtime, 2 auth, 3 not-found, 4 usage")
   .globalOption(
     "-f, --format <format:string>",
     "Output format: table, compact, json",
@@ -35,6 +57,9 @@ const app = new Command()
     hidden: true,
   })
   .globalOption("-t, --team <team:string>", "Team key")
+  .globalOption("--no-input", "Disable interactive prompts", {
+    default: false,
+  })
   .command("auth", authCommand)
   .command("team", teamCommand)
   .command("issue", issueCommand)
@@ -43,6 +68,7 @@ const app = new Command()
   .command("user", userCommand)
   .command("document", documentCommand)
   .command("initiative", initiativeCommand)
+  .command("inbox", inboxCommand)
   .command(
     "me",
     new Command()
@@ -82,6 +108,27 @@ const app = new Command()
             { label: "Created", value: details.createdAt },
           ],
         })
+      }),
+  )
+  .command("completions", new CompletionsCommand())
+  .command(
+    "help",
+    new Command()
+      .description("Show help")
+      .arguments("[command:string]")
+      .action(async (_options, command?: string) => {
+        if (command) {
+          // Try to show help for a specific subcommand
+          const sub = app.getCommand(command, false)
+          if (sub) {
+            sub.showHelp()
+            return
+          }
+          console.error(`error: unknown command "${command}"`)
+          console.error(`  try: linear --help`)
+          Deno.exit(4)
+        }
+        app.showHelp()
       }),
   )
 
@@ -156,7 +203,7 @@ function preprocessArgs(args: string[]): string[] {
 }
 
 try {
-  await app.parse(preprocessArgs([...Deno.args]))
+  await app.parse(preprocessArgs(rawArgs))
 } catch (error) {
   if (error instanceof CliError) {
     console.error(`error: ${error.message}`)
@@ -242,5 +289,25 @@ try {
     }
     Deno.exit(4)
   }
-  throw error
+
+  // Network error catch-all
+  const msg = error instanceof Error ? error.message : String(error)
+
+  if (msg.includes("fetch failed") || msg.includes("NetworkError")) {
+    console.error(
+      "error: network request failed — check your connection",
+    )
+    Deno.exit(1)
+  }
+  if (msg.includes("401") || msg.includes("Unauthorized")) {
+    console.error("error: authentication failed — run: linear auth login")
+    Deno.exit(2)
+  }
+  if (msg.includes("429") || msg.toLowerCase().includes("rate limit")) {
+    console.error("error: rate limited — try again shortly")
+    Deno.exit(1)
+  }
+
+  console.error(`error: ${msg}`)
+  Deno.exit(1)
 }
