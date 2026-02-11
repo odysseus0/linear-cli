@@ -68,6 +68,9 @@ const listCommand = new Command()
   })
   .option("--limit <n:integer>", "Max results", { default: 50 })
   .option("--include-completed", "Include completed/canceled")
+  .option("--mine", "Only my issues (shorthand for --assignee me)", {
+    hidden: true,
+  })
   .action(async (options) => {
     const format = getFormat(options)
     const apiKey = await getAPIKey()
@@ -89,6 +92,11 @@ const listCommand = new Command()
 
     if (stateTypes) {
       filter.state = { type: { in: stateTypes } }
+    }
+
+    // --mine is shorthand for --assignee me (--assignee wins if both set)
+    if (options.mine && !options.assignee) {
+      options.assignee = "me"
     }
 
     // Assignee filter
@@ -359,8 +367,8 @@ const createCommand = new Command()
     const labelNames = options.label?.length
       ? options.label
       : options.type
-        ? [options.type]
-        : undefined
+      ? [options.type]
+      : undefined
     if (labelNames?.length) {
       input.labelIds = await Promise.all(
         labelNames.map((l: string) => resolveLabel(client, teamId, l)),
@@ -687,6 +695,89 @@ const branchCommand = new Command()
     console.log(issue.branchName)
   })
 
+const closeCommand = new Command()
+  .description("Close issue (set to completed state)")
+  .arguments("<id:string>")
+  .action(async (options, id: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const teamKey = (options as unknown as GlobalOptions).team
+
+    const issue = await resolveIssue(client, id, teamKey)
+    const state = await issue.state
+    const team = await state?.team
+    if (!team) throw new CliError("cannot determine team for issue", 1)
+
+    const states = await team.states()
+    const completed = states.nodes.find((s) => s.type === "completed")
+    if (!completed) {
+      throw new CliError(
+        "no completed state found for team",
+        1,
+        "check team workflow settings in Linear",
+      )
+    }
+
+    await client.updateIssue(issue.id, { stateId: completed.id })
+    console.log(`${issue.identifier} closed (${completed.name})`)
+  })
+
+const reopenCommand = new Command()
+  .description("Reopen issue (set to unstarted state)")
+  .arguments("<id:string>")
+  .action(async (options, id: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const teamKey = (options as unknown as GlobalOptions).team
+
+    const issue = await resolveIssue(client, id, teamKey)
+    const state = await issue.state
+    const team = await state?.team
+    if (!team) throw new CliError("cannot determine team for issue", 1)
+
+    const states = await team.states()
+    const unstarted = states.nodes.find((s) => s.type === "unstarted")
+    if (!unstarted) {
+      throw new CliError(
+        "no unstarted state found for team",
+        1,
+        "check team workflow settings in Linear",
+      )
+    }
+
+    await client.updateIssue(issue.id, { stateId: unstarted.id })
+    console.log(`${issue.identifier} reopened (${unstarted.name})`)
+  })
+
+const assignCommand = new Command()
+  .description("Assign issue to user (defaults to me)")
+  .arguments("<id:string> [user:string]")
+  .action(async (options, id: string, user?: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const teamKey = (options as unknown as GlobalOptions).team
+
+    const issue = await resolveIssue(client, id, teamKey)
+    const assigneeName = user ?? "me"
+    const assigneeId = await resolveUser(client, assigneeName)
+
+    await client.updateIssue(issue.id, { assigneeId })
+
+    // Resolve display name for confirmation
+    let displayName: string
+    if (assigneeName === "me") {
+      const viewer = await client.viewer
+      displayName = viewer.name
+    } else {
+      // Re-fetch to get the resolved name
+      const updated = await client.issue(issue.id)
+      const assignee = await updated.assignee
+      displayName = assignee?.name ?? assigneeName
+    }
+
+    console.log(`${issue.identifier} assigned to ${displayName}`)
+  })
+
 export const issueCommand = new Command()
   .description("Manage issues")
   .alias("issues")
@@ -697,3 +788,6 @@ export const issueCommand = new Command()
   .command("delete", deleteCommand)
   .command("comment", commentCommand)
   .command("branch", branchCommand)
+  .command("close", closeCommand)
+  .command("reopen", reopenCommand)
+  .command("assign", assignCommand)

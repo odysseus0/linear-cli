@@ -3,9 +3,12 @@ import { type Format, normalizeFormat } from "./output/formatter.ts"
 export interface GlobalOptions {
   format?: string
   team?: string
+  json?: boolean
 }
 
 /** Extract format from Cliffy's untyped options. Single cast, one place. */
 export function getFormat(options: unknown): Format {
-  return normalizeFormat((options as GlobalOptions).format)
+  const opts = options as GlobalOptions
+  if (opts.json) return "json"
+  return normalizeFormat(opts.format)
 }

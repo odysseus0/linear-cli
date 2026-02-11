@@ -266,6 +266,32 @@ const updateCommand = new Command()
     })
   })
 
+// --- Porcelain: state transitions ---
+
+const startCommand = new Command()
+  .description("Start initiative (set status to active)")
+  .arguments("<name:string>")
+  .action(async (_options, name: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const initiative = await resolveInitiative(client, name)
+    // deno-lint-ignore no-explicit-any
+    await client.updateInitiative(initiative.id, { status: "Active" as any })
+    console.log(`${initiative.name} started`)
+  })
+
+const completeInitiativeCommand = new Command()
+  .description("Complete initiative (set status to completed)")
+  .arguments("<name:string>")
+  .action(async (_options, name: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const initiative = await resolveInitiative(client, name)
+    // deno-lint-ignore no-explicit-any
+    await client.updateInitiative(initiative.id, { status: "Completed" as any })
+    console.log(`${initiative.name} completed`)
+  })
+
 export const initiativeCommand = new Command()
   .description("Manage initiatives")
   .alias("initiatives")
@@ -273,3 +299,5 @@ export const initiativeCommand = new Command()
   .command("view", viewCommand)
   .command("create", createCommand)
   .command("update", updateCommand)
+  .command("start", startCommand)
+  .command("complete", completeInitiativeCommand)

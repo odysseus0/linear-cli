@@ -7,9 +7,11 @@ import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import {
   readStdin,
+  resolveIssue,
   resolveProjectByName,
   resolveUser,
 } from "../resolve.ts"
+import type { GlobalOptions } from "../types.ts"
 import { formatDate, relativeTime } from "../time.ts"
 
 const HEALTH_MAP: Record<string, string> = {
@@ -247,7 +249,21 @@ const updateCommand = new Command()
   .option("--target-date <date:string>", "Target date (YYYY-MM-DD)")
   .option("--start-date <date:string>", "Start date (YYYY-MM-DD)")
   .option("--color <color:string>", "Project color hex")
+  .option("--status <status:string>", "Redirect: use project post instead", {
+    hidden: true,
+  })
   .action(async (options, projectName: string) => {
+    // Intercept --status: agents confuse "project update --status" with project posts
+    if ((options as { status?: string }).status) {
+      console.error(
+        `error: project update does not have a --status flag`,
+      )
+      console.error(
+        `  try: linear project post "${projectName}" --body <text> --health <onTrack|atRisk|offTrack>`,
+      )
+      Deno.exit(4)
+    }
+
     const format = getFormat(options)
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
@@ -524,6 +540,92 @@ const labelsCommand = new Command()
     }
   })
 
+// --- Porcelain: state transitions ---
+
+/** Find project status ID by type (started, paused, completed, canceled). */
+async function resolveProjectStatusId(
+  client: ReturnType<typeof createClient>,
+  statusType: string,
+): Promise<string> {
+  const statuses = await client.projectStatuses()
+  const match = statuses.nodes.find(
+    (s) => s.type?.toLowerCase() === statusType.toLowerCase(),
+  )
+  if (!match) {
+    throw new CliError(
+      `no project status of type "${statusType}" found`,
+      1,
+      "check project status configuration in Linear settings",
+    )
+  }
+  return match.id
+}
+
+const startCommand = new Command()
+  .description("Start project (set state to started)")
+  .arguments("<name:string>")
+  .action(async (_options, name: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const project = await resolveProjectByName(client, name)
+    const statusId = await resolveProjectStatusId(client, "started")
+    await client.updateProject(project.id, { statusId })
+    console.log(`${project.name} started`)
+  })
+
+const pauseCommand = new Command()
+  .description("Pause project (set state to paused)")
+  .arguments("<name:string>")
+  .action(async (_options, name: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const project = await resolveProjectByName(client, name)
+    const statusId = await resolveProjectStatusId(client, "paused")
+    await client.updateProject(project.id, { statusId })
+    console.log(`${project.name} paused`)
+  })
+
+const completeCommand = new Command()
+  .description("Complete project (set state to completed)")
+  .arguments("<name:string>")
+  .action(async (_options, name: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const project = await resolveProjectByName(client, name)
+    const statusId = await resolveProjectStatusId(client, "completed")
+    await client.updateProject(project.id, { statusId })
+    console.log(`${project.name} completed`)
+  })
+
+const cancelCommand = new Command()
+  .description("Cancel project (set state to canceled)")
+  .arguments("<name:string>")
+  .action(async (_options, name: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const project = await resolveProjectByName(client, name)
+    const statusId = await resolveProjectStatusId(client, "canceled")
+    await client.updateProject(project.id, { statusId })
+    console.log(`${project.name} canceled`)
+  })
+
+// --- Porcelain: cross-entity actions ---
+
+const addIssueCommand = new Command()
+  .description("Add issue to project")
+  .arguments("<project:string> <issue:string>")
+  .action(async (options, projectName: string, issueId: string) => {
+    const apiKey = await getAPIKey()
+    const client = createClient(apiKey)
+    const teamKey = (options as unknown as GlobalOptions).team
+
+    const project = await resolveProjectByName(client, projectName)
+    const issue = await resolveIssue(client, issueId, teamKey)
+
+    await client.updateIssue(issue.id, { projectId: project.id })
+    console.log(`${issue.identifier} added to ${project.name}`)
+  })
+
 export const projectCommand = new Command()
   .description("Manage projects")
   .alias("projects")
@@ -534,3 +636,8 @@ export const projectCommand = new Command()
   .command("milestone", milestoneCommand)
   .command("post", postCommand)
   .command("labels", labelsCommand)
+  .command("start", startCommand)
+  .command("pause", pauseCommand)
+  .command("complete", completeCommand)
+  .command("cancel", cancelCommand)
+  .command("add-issue", addIssueCommand)
