@@ -21,7 +21,6 @@ export function renderTable(
   if ("fields" in data) {
     console.log(bold(data.title))
     console.log("━".repeat(data.title.length))
-    console.log()
     const maxLabel = Math.max(...data.fields.map((f) => f.label.length))
     for (const field of data.fields) {
       console.log(

@@ -29,18 +29,20 @@ export const userCommand = new Command()
               email: u.email,
               admin: u.admin ?? false,
               active: u.active ?? true,
+              agent: u.app ?? false,
             })),
           )
           return
         }
 
         render(format, {
-          headers: ["Name", "Email", "Admin", "Active"],
+          headers: ["Name", "Email", "Admin", "Active", "Agent"],
           rows: users.map((u) => [
             u.name ?? "Unknown",
             u.email ?? "-",
             u.admin ? "yes" : "no",
             u.active ? "yes" : "no",
+            u.app ? "yes" : "no",
           ]),
         })
       }),
