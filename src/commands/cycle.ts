@@ -9,6 +9,7 @@ import { formatDate, relativeTime } from "../time.ts"
 
 const listCommand = new Command()
   .description("List cycles")
+  .example("List team cycles", "linear cycle list --team POL")
   .action(async (options) => {
     const format = getFormat(options)
     const apiKey = await getAPIKey()
@@ -55,6 +56,7 @@ const listCommand = new Command()
 
 const viewCommand = new Command()
   .description("View cycle details")
+  .example("View a cycle", "linear cycle view 3 --team POL")
   .arguments("<number:integer>")
   .action(async (options, number: number) => {
     const format = getFormat(options)

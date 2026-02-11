@@ -22,6 +22,8 @@ const HEALTH_MAP: Record<string, string> = {
 
 const listCommand = new Command()
   .description("List projects")
+  .example("List active projects", "linear project list")
+  .example("Include completed", "linear project list --include-completed")
   .option(
     "-s, --state <state:string>",
     "Filter: planned, started, paused, completed, canceled",
@@ -84,6 +86,7 @@ const listCommand = new Command()
 const viewCommand = new Command()
   .alias("show")
   .description("View project details")
+  .example("View a project", "linear project view 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
     const format = getFormat(options)
@@ -186,6 +189,7 @@ const viewCommand = new Command()
 
 const createCommand = new Command()
   .description("Create project")
+  .example("Create a project", "linear project create --name 'Q1 Roadmap' --target-date 2026-03-31")
   .option("--name <name:string>", "Project name", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("--lead <name:string>", "Project lead")
@@ -238,10 +242,14 @@ const createCommand = new Command()
       format,
       `Created project: ${project.name}\n${project.url}`,
     )
+    if (format === "table") {
+      console.error(`  add issues: linear project add-issue '${project.name}' <issue-id>`)
+    }
   })
 
 const updateCommand = new Command()
   .description("Update project")
+  .example("Update target date", "linear project update 'My Project' --target-date 2026-04-01")
   .arguments("<name:string>")
   .option("--name <name:string>", "New name")
   .option("-d, --description <desc:string>", "New description")
@@ -330,6 +338,7 @@ const updateCommand = new Command()
 
 const milestoneListCommand = new Command()
   .description("List milestones for a project")
+  .example("List milestones", "linear project milestone list 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
     const format = getFormat(options)
@@ -381,22 +390,23 @@ const milestoneListCommand = new Command()
 const milestoneCreateCommand = new Command()
   .alias("add")
   .description("Create milestone on a project")
+  .example("Add milestone", "linear project milestone create 'Beta launch' --project 'My Project' --target-date 2026-03-15")
   .arguments("<name:string>")
-  .option("--name <name:string>", "Milestone name", { required: true })
+  .option("--project <project:string>", "Project name", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("--target-date <date:string>", "Target date (YYYY-MM-DD)")
   .option("--date <date:string>", "Alias for --target-date", { hidden: true })
-  .action(async (options, projectName: string) => {
+  .action(async (options, milestoneName: string) => {
     const format = getFormat(options)
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
 
-    const project = await resolveProjectByName(client, projectName)
+    const project = await resolveProjectByName(client, options.project)
 
     // deno-lint-ignore no-explicit-any
     const input: any = {
       projectId: project.id,
-      name: options.name,
+      name: milestoneName,
     }
 
     if (options.description) input.description = options.description
@@ -437,6 +447,7 @@ const milestoneCommand = new Command()
 
 const postCommand = new Command()
   .description("Create project update (status post)")
+  .example("Post status update", "linear project post 'My Project' --body 'On track' --health onTrack")
   .arguments("<name:string>")
   .option("--body <text:string>", "Update body in markdown")
   .option(
@@ -499,6 +510,7 @@ const postCommand = new Command()
 
 const labelsCommand = new Command()
   .description("List labels for a project")
+  .example("List project labels", "linear project labels 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
     const format = getFormat(options)
@@ -563,18 +575,23 @@ async function resolveProjectStatusId(
 
 const startCommand = new Command()
   .description("Start project (set state to started)")
+  .example("Start a project", "linear project start 'My Project'")
   .arguments("<name:string>")
-  .action(async (_options, name: string) => {
+  .action(async (options, name: string) => {
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const project = await resolveProjectByName(client, name)
     const statusId = await resolveProjectStatusId(client, "started")
     await client.updateProject(project.id, { statusId })
     console.log(`${project.name} started`)
+    if (getFormat(options) === "table") {
+      console.error(`  post update: linear project post '${name}' --body '<text>'`)
+    }
   })
 
 const pauseCommand = new Command()
   .description("Pause project (set state to paused)")
+  .example("Pause a project", "linear project pause 'My Project'")
   .arguments("<name:string>")
   .action(async (_options, name: string) => {
     const apiKey = await getAPIKey()
@@ -587,6 +604,7 @@ const pauseCommand = new Command()
 
 const completeCommand = new Command()
   .description("Complete project (set state to completed)")
+  .example("Complete a project", "linear project complete 'My Project'")
   .arguments("<name:string>")
   .action(async (_options, name: string) => {
     const apiKey = await getAPIKey()
@@ -599,6 +617,7 @@ const completeCommand = new Command()
 
 const cancelCommand = new Command()
   .description("Cancel project (set state to canceled)")
+  .example("Cancel a project", "linear project cancel 'My Project'")
   .arguments("<name:string>")
   .action(async (_options, name: string) => {
     const apiKey = await getAPIKey()
@@ -613,6 +632,7 @@ const cancelCommand = new Command()
 
 const addIssueCommand = new Command()
   .description("Add issue to project")
+  .example("Add issue to project", "linear project add-issue 'My Project' POL-5")
   .arguments("<project:string> <issue:string>")
   .action(async (options, projectName: string, issueId: string) => {
     const apiKey = await getAPIKey()

@@ -44,6 +44,7 @@ export const teamCommand = new Command()
     "list",
     new Command()
       .description("List teams")
+      .example("List all teams", "linear team list")
       .action(async (options) => {
         const format = getFormat(options)
         const apiKey = await getAPIKey()
@@ -68,6 +69,7 @@ export const teamCommand = new Command()
     new Command()
       .alias("show")
       .description("View team details")
+      .example("View a team", "linear team view POL")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
         const format = getFormat(options)
@@ -106,6 +108,7 @@ export const teamCommand = new Command()
     "members",
     new Command()
       .description("List team members")
+      .example("List team members", "linear team members POL")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
         const format = getFormat(options)
@@ -139,6 +142,7 @@ export const teamCommand = new Command()
     "overview",
     new Command()
       .description("Team status dashboard")
+      .example("Team overview", "linear team overview POL")
       .arguments("[key:string]")
       .action(async (options, key?: string) => {
         const format = getFormat(options)
@@ -242,6 +246,7 @@ export const teamCommand = new Command()
     "states",
     new Command()
       .description("List workflow states for a team")
+      .example("List workflow states", "linear team states POL")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
         const format = getFormat(options)
@@ -277,6 +282,7 @@ export const teamCommand = new Command()
     "labels",
     new Command()
       .description("List labels for a team")
+      .example("List team labels", "linear team labels POL")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
         const format = getFormat(options)

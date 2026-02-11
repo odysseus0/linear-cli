@@ -13,6 +13,7 @@ export const userCommand = new Command()
     "list",
     new Command()
       .description("List workspace users")
+      .example("List all users", "linear user list")
       .action(async (options) => {
         const format = getFormat(options)
         const apiKey = await getAPIKey()
@@ -49,6 +50,8 @@ export const userCommand = new Command()
     new Command()
       .alias("show")
       .description("View user details")
+      .example("View a user", "linear user view 'Jane Smith'")
+      .example("View yourself", "linear user view me")
       .arguments("<name:string>")
       .action(async (options, name: string) => {
         const format = getFormat(options)
@@ -136,6 +139,7 @@ export const userCommand = new Command()
     "me",
     new Command()
       .description("Show current authenticated user")
+      .example("Who am I", "linear user me")
       .action(async (options) => {
         const format = getFormat(options)
         const apiKey = await getAPIKey()

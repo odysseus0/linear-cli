@@ -9,6 +9,8 @@ import { formatDate, relativeTime } from "../time.ts"
 
 const listCommand = new Command()
   .description("List documents")
+  .example("List all documents", "linear document list")
+  .example("Filter by project", "linear document list --project 'My Project'")
   .option("--project <name:string>", "Filter by project name")
   .action(async (options) => {
     const format = getFormat(options)
@@ -58,6 +60,7 @@ const listCommand = new Command()
 const viewCommand = new Command()
   .alias("show")
   .description("View document")
+  .example("View a document", "linear document view 'Design Spec'")
   .arguments("<title-or-id:string>")
   .action(async (options, titleOrId: string) => {
     const format = getFormat(options)
@@ -125,6 +128,7 @@ const viewCommand = new Command()
 
 const createCommand = new Command()
   .description("Create document")
+  .example("Create a document", "linear document create --title 'Design Spec' --project 'My Project'")
   .option("--title <title:string>", "Document title", { required: true })
   .option("--project <name:string>", "Associated project")
   .action(async (options) => {

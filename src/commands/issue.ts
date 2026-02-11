@@ -52,6 +52,8 @@ const DEFAULT_ACTIVE_STATES = ["triage", "backlog", "unstarted", "started"]
 
 const listCommand = new Command()
   .description("List issues")
+  .example("List team issues", "linear issue list --team POL")
+  .example("List my issues", "linear issue list --team POL --assignee me")
   .option("-s, --state <state:string>", "State type filter", {
     collect: true,
   })
@@ -210,6 +212,7 @@ const listCommand = new Command()
 const viewCommand = new Command()
   .alias("show")
   .description("View issue details")
+  .example("View an issue", "linear issue view POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
     const format = getFormat(options)
@@ -328,6 +331,8 @@ const viewCommand = new Command()
 
 const createCommand = new Command()
   .description("Create issue")
+  .example("Create a bug", "linear issue create --team POL --title 'Login crash' --priority urgent --label bug")
+  .example("Create and assign to me", "linear issue create --team POL --title 'Fix tests' --assignee me")
   .option("--title <title:string>", "Issue title", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("-a, --assignee <name:string>", "Assignee name or 'me'")
@@ -405,10 +410,15 @@ const createCommand = new Command()
       format,
       `Created ${issue.identifier}: ${issue.title}\n${issue.url}`,
     )
+    if (format === "table") {
+      console.error(`  assign: linear issue assign ${issue.identifier}`)
+    }
   })
 
 const updateCommand = new Command()
   .description("Update issue")
+  .example("Change priority", "linear issue update POL-5 --priority high")
+  .example("Add a label", "linear issue update POL-5 --add-label bug")
   .arguments("<id:string>")
   .option("--title <title:string>", "New title")
   .option("-d, --description <desc:string>", "New description")
@@ -546,6 +556,7 @@ const updateCommand = new Command()
 
 const deleteCommand = new Command()
   .description("Delete (archive) issue")
+  .example("Delete an issue", "linear issue delete POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
     const format = getFormat(options)
@@ -657,6 +668,8 @@ async function addComment(
 
 const commentCommand = new Command()
   .description("Add comment or list comments")
+  .example("Add a comment", "linear issue comment POL-5 'Looks good'")
+  .example("List comments", "linear issue comment list POL-5")
   .arguments("<id:string> [body:string]")
   .option("--body <text:string>", "Comment text (alternative to positional)")
   .action(
@@ -681,6 +694,7 @@ const commentCommand = new Command()
 
 const branchCommand = new Command()
   .description("Get git branch name for issue")
+  .example("Get branch name", "linear issue branch POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
     const format = getFormat(options)
@@ -700,6 +714,7 @@ const branchCommand = new Command()
 
 const closeCommand = new Command()
   .description("Close issue (set to completed state)")
+  .example("Close an issue", "linear issue close POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
     const apiKey = await getAPIKey()
@@ -727,6 +742,7 @@ const closeCommand = new Command()
 
 const reopenCommand = new Command()
   .description("Reopen issue (set to unstarted state)")
+  .example("Reopen an issue", "linear issue reopen POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
     const apiKey = await getAPIKey()
@@ -750,10 +766,14 @@ const reopenCommand = new Command()
 
     await client.updateIssue(issue.id, { stateId: unstarted.id })
     console.log(`${issue.identifier} reopened (${unstarted.name})`)
+    if (getFormat(options) === "table") {
+      console.error(`  assign: linear issue assign ${issue.identifier}`)
+    }
   })
 
 const startCommand = new Command()
   .description("Start issue (set to in-progress state)")
+  .example("Start working on issue", "linear issue start POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
     const apiKey = await getAPIKey()
@@ -777,10 +797,15 @@ const startCommand = new Command()
 
     await client.updateIssue(issue.id, { stateId: started.id })
     console.log(`${issue.identifier} started (${started.name})`)
+    if (getFormat(options) === "table") {
+      console.error(`  close when done: linear issue close ${issue.identifier}`)
+    }
   })
 
 const assignCommand = new Command()
   .description("Assign issue to user (defaults to me)")
+  .example("Assign to me", "linear issue assign POL-5")
+  .example("Assign to someone", "linear issue assign POL-5 'Jane Smith'")
   .arguments("<id:string> [user:string]")
   .action(async (options, id: string, user?: string) => {
     const apiKey = await getAPIKey()
@@ -806,6 +831,9 @@ const assignCommand = new Command()
     }
 
     console.log(`${issue.identifier} assigned to ${displayName}`)
+    if (getFormat(options) === "table") {
+      console.error(`  start: linear issue start ${issue.identifier}`)
+    }
   })
 
 export const issueCommand = new Command()

@@ -9,6 +9,8 @@ import { formatDate, relativeTime } from "../time.ts"
 
 const listCommand = new Command()
   .description("List initiatives")
+  .example("List all initiatives", "linear initiative list")
+  .example("List active only", "linear initiative list --status active")
   .option(
     "-s, --status <status:string>",
     "Filter: planned, active, completed",
@@ -61,6 +63,7 @@ const listCommand = new Command()
 const viewCommand = new Command()
   .alias("show")
   .description("View initiative details")
+  .example("View an initiative", "linear initiative view 'Q1 Goals'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
     const format = getFormat(options)
@@ -134,6 +137,7 @@ const viewCommand = new Command()
 
 const createCommand = new Command()
   .description("Create initiative")
+  .example("Create an initiative", "linear initiative create --name 'Q1 Goals' --status active")
   .option("--name <name:string>", "Initiative name", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("--owner <name:string>", "Initiative owner")
@@ -196,6 +200,7 @@ const createCommand = new Command()
 
 const updateCommand = new Command()
   .description("Update initiative")
+  .example("Update status", "linear initiative update 'Q1 Goals' --status completed")
   .arguments("<name:string>")
   .option("--name <name:string>", "New name")
   .option("-d, --description <desc:string>", "New description")
@@ -270,6 +275,7 @@ const updateCommand = new Command()
 
 const startCommand = new Command()
   .description("Start initiative (set status to active)")
+  .example("Start an initiative", "linear initiative start 'Q1 Goals'")
   .arguments("<name:string>")
   .action(async (_options, name: string) => {
     const apiKey = await getAPIKey()
@@ -282,6 +288,7 @@ const startCommand = new Command()
 
 const completeInitiativeCommand = new Command()
   .description("Complete initiative (set status to completed)")
+  .example("Complete an initiative", "linear initiative complete 'Q1 Goals'")
   .arguments("<name:string>")
   .action(async (_options, name: string) => {
     const apiKey = await getAPIKey()
