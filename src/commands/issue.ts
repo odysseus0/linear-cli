@@ -19,6 +19,7 @@ import {
   resolveUser,
 } from "../resolve.ts"
 import { compactTime, formatDate, relativeTime } from "../time.ts"
+import { renderMarkdown } from "../output/markdown.ts"
 
 function priorityIndicator(priority: number): string {
   switch (priority) {
@@ -138,12 +139,14 @@ const listCommand = new Command()
       issues.nodes.map(async (issue) => {
         const state = await issue.state
         const assignee = await issue.assignee
+        const delegate = await issue.delegate
         return {
           identifier: issue.identifier,
           title: issue.title,
           priority: issue.priority,
           state: state?.name ?? "-",
           assignee: assignee?.name ?? "-",
+          delegate: delegate?.name ?? null,
           updatedAt: issue.updatedAt,
           url: issue.url,
         }
@@ -181,28 +184,38 @@ const listCommand = new Command()
       return
     }
 
+    const hasDelegate = rows.some((r) => r.delegate)
+
     if (format === "table") {
+      const headers = ["\u25CC", "ID", "State", "Assignee"]
+      if (hasDelegate) headers.push("Delegate")
+      headers.push("Title", "Updated")
       render("table", {
-        headers: ["\u25CC", "ID", "State", "Assignee", "Title", "Updated"],
-        rows: rows.map((r) => [
-          priorityIndicator(r.priority),
-          r.identifier,
-          r.state,
-          r.assignee,
-          r.title,
-          relativeTime(r.updatedAt),
-        ]),
+        headers,
+        rows: rows.map((r) => {
+          const row = [
+            priorityIndicator(r.priority),
+            r.identifier,
+            r.state,
+            r.assignee,
+          ]
+          if (hasDelegate) row.push(r.delegate ?? "-")
+          row.push(r.title, relativeTime(r.updatedAt))
+          return row
+        }),
       })
     } else {
+      const headers = ["ID", "State", "Assignee"]
+      if (hasDelegate) headers.push("Delegate")
+      headers.push("Title", "Updated")
       render("compact", {
-        headers: ["ID", "State", "Assignee", "Title", "Updated"],
-        rows: rows.map((r) => [
-          r.identifier,
-          r.state,
-          r.assignee,
-          r.title,
-          compactTime(r.updatedAt),
-        ]),
+        headers,
+        rows: rows.map((r) => {
+          const row = [r.identifier, r.state, r.assignee]
+          if (hasDelegate) row.push(r.delegate ?? "-")
+          row.push(r.title, compactTime(r.updatedAt))
+          return row
+        }),
       })
     }
   })
@@ -211,6 +224,7 @@ const viewCommand = new Command()
   .alias("show")
   .description("View issue details")
   .arguments("<id:string>")
+  .option("-v, --verbose", "Show full agent activity log")
   .action(async (options, id: string) => {
     const format = getFormat(options)
     const apiKey = await getAPIKey()
@@ -220,6 +234,7 @@ const viewCommand = new Command()
     const issue = await resolveIssue(client, id, teamKey)
     const state = await issue.state
     const assignee = await issue.assignee
+    const delegate = await issue.delegate
     const labelsConn = await issue.labels()
     const labels = labelsConn.nodes
     const project = await issue.project
@@ -228,6 +243,47 @@ const viewCommand = new Command()
     const comments = commentsConn.nodes
 
     const branchName = await issue.branchName
+
+    // Fetch agent sessions for this issue
+    const allSessions = await client.agentSessions()
+    const sessions = []
+    for (const session of allSessions.nodes) {
+      const sessionIssue = await session.issue
+      if (sessionIssue?.id === issue.id) {
+        const appUser = await session.appUser
+        const activities = await session.activities()
+        // Find the last response activity (the summary/result)
+        const responseActivity = activities.nodes.find(
+          (a) =>
+            // deno-lint-ignore no-explicit-any
+            (a.content as any)?.__typename ===
+              "AgentActivityResponseContent",
+        )
+        sessions.push({
+          agent: appUser?.name ?? "Unknown",
+          status: session.status,
+          createdAt: session.createdAt,
+          // deno-lint-ignore no-explicit-any
+          summary: (responseActivity?.content as any)?.body ?? null,
+          externalUrl: session.externalLinks?.[0]?.url ??
+            // deno-lint-ignore no-explicit-any
+            (session.externalUrls as any)?.[0]?.url ?? null,
+          activities: (options as { verbose?: boolean }).verbose
+            ? activities.nodes.map((a) => ({
+              // deno-lint-ignore no-explicit-any
+              type: (a.content as any)?.__typename
+                ?.replace("AgentActivity", "")
+                .replace("Content", "")
+                .toLowerCase() ?? "unknown",
+              // deno-lint-ignore no-explicit-any
+              body: (a.content as any)?.body ?? "",
+              ephemeral: a.ephemeral,
+              createdAt: a.createdAt,
+            }))
+            : null,
+        })
+      }
+    }
 
     if (format === "json") {
       const commentData = await Promise.all(
@@ -246,6 +302,7 @@ const viewCommand = new Command()
         state: state?.name ?? "-",
         priority: priorityName(issue.priority),
         assignee: assignee?.name ?? null,
+        delegate: delegate?.name ?? null,
         labels: labels.map((l) => l.name),
         project: project?.name ?? null,
         cycle: cycle?.name ?? null,
@@ -255,6 +312,7 @@ const viewCommand = new Command()
         branchName: branchName ?? null,
         description: issue.description ?? null,
         comments: commentData,
+        agentSessions: sessions,
       })
       return
     }
@@ -266,6 +324,7 @@ const viewCommand = new Command()
         `state\t${state?.name ?? "-"}`,
         `priority\t${priorityName(issue.priority)}`,
         `assignee\t${assignee?.name ?? "-"}`,
+        `delegate\t${delegate?.name ?? "-"}`,
         `labels\t${labels.length ? labels.map((l) => l.name).join(", ") : "-"}`,
         `project\t${project?.name ?? "-"}`,
         `cycle\t${cycle?.name ?? "-"}`,
@@ -275,6 +334,15 @@ const viewCommand = new Command()
         `branch\t${branchName ?? "-"}`,
         `description\t${issue.description ?? "-"}`,
       ]
+      if (sessions.length > 0) {
+        for (const session of sessions) {
+          lines.push(
+            `agent_session\t${session.agent}\t${session.status}\t${
+              session.summary?.replace(/\n/g, " ").slice(0, 200) ?? "-"
+            }\t${session.externalUrl ?? "-"}`,
+          )
+        }
+      }
       console.log(lines.join("\n"))
       return
     }
@@ -286,6 +354,7 @@ const viewCommand = new Command()
         { label: "State", value: state?.name ?? "-" },
         { label: "Priority", value: priorityName(issue.priority) },
         { label: "Assignee", value: assignee?.name ?? "-" },
+        { label: "Delegate", value: delegate?.name ?? "-" },
         {
           label: "Labels",
           value: labels.length ? labels.map((l) => l.name).join(", ") : "-",
@@ -310,7 +379,9 @@ const viewCommand = new Command()
     })
 
     if (issue.description) {
-      console.log(`\nDescription:\n${issue.description}`)
+      console.log(
+        `\nDescription:\n${renderMarkdown(issue.description)}`,
+      )
     }
 
     if (comments.length > 0) {
@@ -318,10 +389,45 @@ const viewCommand = new Command()
       for (const comment of comments) {
         const user = await comment.user
         console.log(
-          `  ${user?.name ?? "Unknown"} (${
+          `\n${user?.name ?? "Unknown"} (${
             relativeTime(comment.createdAt)
-          }): ${comment.body}`,
+          }):\n${renderMarkdown(comment.body, { indent: "  " })}`,
         )
+      }
+    }
+
+    if (sessions.length > 0) {
+      console.log(`\nAgent Sessions (${sessions.length}):`)
+      for (const session of sessions) {
+        const statusLabel = session.status === "complete"
+          ? "complete"
+          : session.status === "awaitingInput"
+          ? "needs input"
+          : session.status === "error"
+          ? "error"
+          : session.status
+        console.log(
+          `\n${session.agent} · ${statusLabel} · ${
+            relativeTime(session.createdAt)
+          }`,
+        )
+        if (session.summary) {
+          console.log(renderMarkdown(session.summary, { indent: "  " }))
+        }
+        if (session.externalUrl) {
+          console.log(`  View task → ${session.externalUrl}`)
+        }
+        if (session.activities) {
+          console.log(`  Activities:`)
+          for (const act of session.activities) {
+            const raw = act.body.length > 120
+              ? act.body.slice(0, 117) + "..."
+              : act.body
+            console.log(
+              `    [${act.type}] ${renderMarkdown(raw, { indent: "    " })}`,
+            )
+          }
+        }
       }
     }
   })
@@ -521,6 +627,7 @@ const updateCommand = new Command()
     const updated = await client.issue(issue.id)
     const updatedState = await updated.state
     const updatedAssignee = await updated.assignee
+    const updatedDelegate = await updated.delegate
 
     if (format === "json") {
       renderJson({
@@ -528,19 +635,25 @@ const updateCommand = new Command()
         title: updated.title,
         state: updatedState?.name ?? "-",
         assignee: updatedAssignee?.name ?? null,
+        delegate: updatedDelegate?.name ?? null,
         url: updated.url,
       })
       return
     }
 
+    const fields = [
+      { label: "State", value: updatedState?.name ?? "-" },
+      { label: "Priority", value: priorityName(updated.priority) },
+      { label: "Assignee", value: updatedAssignee?.name ?? "-" },
+    ]
+    if (updatedDelegate) {
+      fields.push({ label: "Delegate", value: updatedDelegate.name })
+    }
+    fields.push({ label: "URL", value: updated.url })
+
     render(format === "table" ? "table" : "compact", {
       title: `${updated.identifier}: ${updated.title}`,
-      fields: [
-        { label: "State", value: updatedState?.name ?? "-" },
-        { label: "Priority", value: priorityName(updated.priority) },
-        { label: "Assignee", value: updatedAssignee?.name ?? "-" },
-        { label: "URL", value: updated.url },
-      ],
+      fields,
     })
   })
 
