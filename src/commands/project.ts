@@ -1,4 +1,5 @@
 import { Command } from "@cliffy/command"
+import { ProjectUpdateHealthType } from "@linear/sdk"
 import { createClient } from "../client.ts"
 import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
@@ -14,10 +15,10 @@ import {
 import type { GlobalOptions } from "../types.ts"
 import { formatDate, relativeTime } from "../time.ts"
 
-const HEALTH_MAP: Record<string, string> = {
-  ontrack: "onTrack",
-  atrisk: "atRisk",
-  offtrack: "offTrack",
+const HEALTH_MAP: Record<string, ProjectUpdateHealthType> = {
+  ontrack: ProjectUpdateHealthType.OnTrack,
+  atrisk: ProjectUpdateHealthType.AtRisk,
+  offtrack: ProjectUpdateHealthType.OffTrack,
 }
 
 async function buildProjectJson(
@@ -228,33 +229,27 @@ const createCommand = new Command()
     const client = createClient(apiKey)
 
     const description = options.description ?? await readStdin()
+    const leadId = options.lead
+      ? await resolveUser(client, options.lead)
+      : undefined
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {
-      name: options.name,
-    }
-
-    if (description) input.description = description
-    if (options.targetDate) input.targetDate = options.targetDate
-
-    if (options.lead) {
-      input.leadId = await resolveUser(client, options.lead)
-    }
-
-    // Add team if specified
-    if ((options as { team?: string }).team) {
+    let teamIds: string[] = []
+    const teamKey = (options as { team?: string }).team
+    if (teamKey) {
       const teams = await client.teams()
       const team = teams.nodes.find(
-        (t) =>
-          t.key.toLowerCase() ===
-            (options as { team?: string }).team!.toLowerCase(),
+        (t) => t.key.toLowerCase() === teamKey.toLowerCase(),
       )
-      if (team) {
-        input.teamIds = [team.id]
-      }
+      if (team) teamIds = [team.id]
     }
 
-    const payload = await client.createProject(input)
+    const payload = await client.createProject({
+      name: options.name,
+      teamIds,
+      ...(description && { description }),
+      ...(options.targetDate && { targetDate: options.targetDate }),
+      ...(leadId && { leadId }),
+    })
     const project = await payload.project
 
     if (!project) {
@@ -311,28 +306,19 @@ const updateCommand = new Command()
 
     const project = await resolveProjectByName(client, projectName)
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {}
-
-    if (options.name) input.name = options.name
-
-    // Description: flag -> stdin
     const description = options.description ?? (await readStdin())
-    if (description !== undefined) input.description = description
+    const leadId = options.lead !== undefined
+      ? (options.lead === "" ? null : await resolveUser(client, options.lead))
+      : undefined
 
-    if (options.lead !== undefined) {
-      if (options.lead === "") {
-        input.leadId = null
-      } else {
-        input.leadId = await resolveUser(client, options.lead)
-      }
-    }
-
-    if (options.targetDate) input.targetDate = options.targetDate
-    if (options.startDate) input.startDate = options.startDate
-    if (options.color) input.color = options.color
-
-    const payload = await client.updateProject(project.id, input)
+    const payload = await client.updateProject(project.id, {
+      ...(options.name && { name: options.name }),
+      ...(description !== undefined && { description }),
+      ...(leadId !== undefined && { leadId }),
+      ...(options.targetDate && { targetDate: options.targetDate }),
+      ...(options.startDate && { startDate: options.startDate }),
+      ...(options.color && { color: options.color }),
+    })
     const updated = await payload.project
 
     if (!updated) {
@@ -423,18 +409,15 @@ const milestoneCreateCommand = new Command()
 
     const project = await resolveProjectByName(client, options.project)
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {
-      projectId: project.id,
-      name: milestoneName,
-    }
-
-    if (options.description) input.description = options.description
     const targetDate = options.targetDate ??
       (options as { date?: string }).date
-    if (targetDate) input.targetDate = targetDate
 
-    const payload = await client.createProjectMilestone(input)
+    const payload = await client.createProjectMilestone({
+      projectId: project.id,
+      name: milestoneName,
+      ...(options.description && { description: options.description }),
+      ...(targetDate && { targetDate }),
+    })
     const milestone = await payload.projectMilestone
 
     if (!milestone) {
@@ -486,26 +469,23 @@ const postCommand = new Command()
 
     const body = options.body ?? (await readStdin())
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {
-      projectId: project.id,
-    }
-
-    if (body) input.body = body
-
+    let health: ProjectUpdateHealthType | undefined
     if (options.health) {
-      const normalized = HEALTH_MAP[options.health.toLowerCase()]
-      if (!normalized) {
+      health = HEALTH_MAP[options.health.toLowerCase()]
+      if (!health) {
         throw new CliError(
           `invalid health "${options.health}"`,
           4,
           "try: onTrack, atRisk, offTrack",
         )
       }
-      input.health = normalized
     }
 
-    const payload = await client.createProjectUpdate(input)
+    const payload = await client.createProjectUpdate({
+      projectId: project.id,
+      ...(body && { body }),
+      ...(health && { health }),
+    })
     const update = await payload.projectUpdate
 
     if (!update) {

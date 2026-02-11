@@ -17,15 +17,13 @@ const listCommand = new Command()
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
 
-    // Build filter if --project specified
-    // deno-lint-ignore no-explicit-any
-    const variables: any = {}
-    if (options.project) {
-      const projectId = await resolveProject(client, options.project)
-      variables.filter = { project: { id: { eq: projectId } } }
-    }
+    const projectId = options.project
+      ? await resolveProject(client, options.project)
+      : undefined
 
-    const docs = await client.documents(variables)
+    const docs = await client.documents({
+      ...(projectId && { filter: { project: { id: { eq: projectId } } } }),
+    })
     const items = docs.nodes
 
     const rows = await Promise.all(
@@ -137,19 +135,15 @@ const createCommand = new Command()
     const client = createClient(apiKey)
 
     const content = await readStdin()
+    const projectId = options.project
+      ? await resolveProject(client, options.project)
+      : undefined
 
-    // deno-lint-ignore no-explicit-any
-    const input: any = {
+    const payload = await client.createDocument({
       title: options.title,
-    }
-
-    if (content) input.content = content
-
-    if (options.project) {
-      input.projectId = await resolveProject(client, options.project)
-    }
-
-    const payload = await client.createDocument(input)
+      ...(content && { content }),
+      ...(projectId && { projectId }),
+    })
     const doc = await payload.document
 
     if (!doc) {
