@@ -13,10 +13,12 @@ const listCommand = new Command()
   .description("List initiatives")
   .example("List all initiatives", "linear initiative list")
   .example("List active only", "linear initiative list --status active")
+  .example("Filter by owner", "linear initiative list --owner Alice")
   .option(
     "-s, --status <status:string>",
     "Filter: planned, active, completed",
   )
+  .option("--owner <name:string>", "Filter by owner name (substring match)")
   .action(async (options) => {
     const format = getFormat(options)
     const apiKey = await getAPIKey()
@@ -32,7 +34,7 @@ const listCommand = new Command()
       )
     }
 
-    const rows = await Promise.all(
+    let rows = await Promise.all(
       items.map(async (i) => {
         const owner = await i.owner
         return {
@@ -44,6 +46,12 @@ const listCommand = new Command()
         }
       }),
     )
+
+    // Filter by owner (substring, case-insensitive)
+    if (options.owner) {
+      const needle = options.owner.toLowerCase()
+      rows = rows.filter((r) => r.owner.toLowerCase().includes(needle))
+    }
 
     if (format === "json") {
       renderJson(rows)

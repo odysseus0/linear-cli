@@ -24,6 +24,8 @@ const listCommand = new Command()
   .description("List projects")
   .example("List active projects", "linear project list")
   .example("Include completed", "linear project list --include-completed")
+  .example("Filter by lead", "linear project list --lead Alice")
+  .example("Sort by progress", "linear project list --sort progress")
   .option(
     "-s, --state <state:string>",
     "Filter: planned, started, paused, completed, canceled",
@@ -32,6 +34,10 @@ const listCommand = new Command()
     },
   )
   .option("--include-completed", "Include completed/canceled")
+  .option("--lead <name:string>", "Filter by lead name (substring match)")
+  .option("--sort <field:string>", "Sort: name, created, updated, target-date, progress", {
+    default: "name",
+  })
   .action(async (options) => {
     const format = getFormat(options)
     const apiKey = await getAPIKey()
@@ -52,22 +58,62 @@ const listCommand = new Command()
       )
     }
 
-    const rows = await Promise.all(
+    let rows = await Promise.all(
       items.map(async (p) => {
         const lead = await p.lead
         return {
           name: p.name,
           state: p.state ?? "-",
+          progressNum: p.progress ?? 0,
           progress: `${Math.round((p.progress ?? 0) * 100)}%`,
           lead: lead?.name ?? "-",
           targetDate: p.targetDate ?? "-",
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
           url: p.url,
         }
       }),
     )
 
+    // Filter by lead (substring, case-insensitive)
+    if (options.lead) {
+      const needle = options.lead.toLowerCase()
+      rows = rows.filter((r) => r.lead.toLowerCase().includes(needle))
+    }
+
+    // Sort
+    const sortField = options.sort ?? "name"
+    rows.sort((a, b) => {
+      switch (sortField) {
+        case "name":
+          return a.name.localeCompare(b.name)
+        case "created":
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        case "updated":
+          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        case "target-date": {
+          // Nulls ("-") sort last
+          if (a.targetDate === "-" && b.targetDate === "-") return 0
+          if (a.targetDate === "-") return 1
+          if (b.targetDate === "-") return -1
+          return a.targetDate.localeCompare(b.targetDate)
+        }
+        case "progress":
+          return b.progressNum - a.progressNum
+        default:
+          return 0
+      }
+    })
+
     if (format === "json") {
-      renderJson(rows)
+      renderJson(rows.map((r) => ({
+        name: r.name,
+        state: r.state,
+        progress: r.progress,
+        lead: r.lead,
+        targetDate: r.targetDate,
+        url: r.url,
+      })))
       return
     }
 
