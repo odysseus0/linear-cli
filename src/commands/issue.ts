@@ -966,6 +966,7 @@ const branchCommand = new Command()
   })
 
 const closeCommand = new Command()
+  .alias("done").alias("finish").alias("complete").alias("resolve")
   .description("Close issue (set to completed state)")
   .example("Close an issue", "linear issue close POL-5")
   .example("Close multiple issues", "linear issue close POL-1 POL-2 POL-3")
@@ -1025,6 +1026,7 @@ ${issue.url}`,
   })
 
 const reopenCommand = new Command()
+  .alias("open")
   .description("Reopen issue (set to unstarted state)")
   .example("Reopen an issue", "linear issue reopen POL-5")
   .example("Reopen multiple issues", "linear issue reopen POL-1 POL-2")
@@ -1088,6 +1090,7 @@ ${issue.url}`,
   })
 
 const startCommand = new Command()
+  .alias("begin")
   .description("Start issue (set to in-progress state)")
   .example("Start working on issue", "linear issue start POL-5")
   .example("Start multiple issues", "linear issue start POL-1 POL-2")
