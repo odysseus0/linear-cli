@@ -1,12 +1,10 @@
 import { Command } from "@cliffy/command"
-import { createClient } from "../client.ts"
 import { CliError } from "../errors.ts"
-import { getAPIKey } from "../auth.ts"
-import { getFormat } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import { readStdin, resolveDocument, resolveProject } from "../resolve.ts"
 import { formatDate, relativeTime } from "../time.ts"
+import { getCommandContext } from "./_shared/context.ts"
 
 const listCommand = new Command()
   .description("List documents")
@@ -14,9 +12,7 @@ const listCommand = new Command()
   .example("Filter by project", "linear document list --project 'My Project'")
   .option("--project <name:string>", "Filter by project name")
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const projectId = options.project
       ? await resolveProject(client, options.project)
@@ -62,78 +58,78 @@ const viewCommand = new Command()
   .example("View a document", "linear document view 'Design Spec'")
   .arguments("<title-or-id:string>")
   .action(async (options, titleOrId: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const doc = await resolveDocument(client, titleOrId)
 
     const creator = await doc.creator
     const project = await doc.project
+    const payload = {
+      id: doc.id,
+      title: doc.title,
+      content: doc.content ?? "",
+      project: project?.name ?? null,
+      creator: creator?.name ?? null,
+      url: doc.url,
+      createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
+    }
 
     if (format === "json") {
-      renderJson({
-        id: doc.id,
-        title: doc.title,
-        content: doc.content ?? "",
-        project: project?.name ?? null,
-        creator: creator?.name ?? null,
-        url: doc.url,
-        createdAt: doc.createdAt,
-        updatedAt: doc.updatedAt,
-      })
+      renderJson(payload)
       return
     }
 
     if (format === "compact") {
       const lines = [
-        `title\t${doc.title}`,
-        `project\t${project?.name ?? "-"}`,
-        `creator\t${creator?.name ?? "-"}`,
-        `url\t${doc.url}`,
+        `title\t${payload.title}`,
+        `project\t${payload.project ?? "-"}`,
+        `creator\t${payload.creator ?? "-"}`,
+        `url\t${payload.url}`,
       ]
       console.log(lines.join("\n"))
-      if (doc.content) {
-        console.log(`\n${doc.content}`)
+      if (payload.content) {
+        console.log(`\n${payload.content}`)
       }
       return
     }
 
     render("table", {
-      title: doc.title,
+      title: payload.title,
       fields: [
-        { label: "Project", value: project?.name ?? "-" },
-        { label: "Creator", value: creator?.name ?? "-" },
+        { label: "Project", value: payload.project ?? "-" },
+        { label: "Creator", value: payload.creator ?? "-" },
         {
           label: "Created",
-          value: `${formatDate(doc.createdAt)} (${
-            relativeTime(doc.createdAt)
+          value: `${formatDate(payload.createdAt)} (${
+            relativeTime(payload.createdAt)
           })`,
         },
         {
           label: "Updated",
-          value: `${formatDate(doc.updatedAt)} (${
-            relativeTime(doc.updatedAt)
+          value: `${formatDate(payload.updatedAt)} (${
+            relativeTime(payload.updatedAt)
           })`,
         },
-        { label: "URL", value: doc.url },
+        { label: "URL", value: payload.url },
       ],
     })
 
-    if (doc.content) {
-      console.log(`\n${doc.content}`)
+    if (payload.content) {
+      console.log(`\n${payload.content}`)
     }
   })
 
 const createCommand = new Command()
   .description("Create document")
-  .example("Create a document", "linear document create --title 'Design Spec' --project 'My Project'")
+  .example(
+    "Create a document",
+    "linear document create --title 'Design Spec' --project 'My Project'",
+  )
   .option("--title <title:string>", "Document title", { required: true })
   .option("--project <name:string>", "Associated project")
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const content = await readStdin()
     const projectId = options.project
@@ -151,12 +147,13 @@ const createCommand = new Command()
       throw new CliError("failed to create document", 1)
     }
 
+    const result = { title: doc.title, url: doc.url }
     if (format === "json") {
-      renderJson({ title: doc.title, url: doc.url })
+      renderJson(result)
       return
     }
 
-    renderMessage(format, `Created document: ${doc.title}\n${doc.url}`)
+    renderMessage(format, `Created document: ${result.title}\n${result.url}`)
   })
 
 export const documentCommand = new Command()

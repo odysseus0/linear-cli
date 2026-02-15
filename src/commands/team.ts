@@ -1,11 +1,10 @@
 import { Command } from "@cliffy/command"
-import { createClient } from "../client.ts"
-import { getAPIKey } from "../auth.ts"
+import type { LinearClient } from "@linear/sdk"
 import { CliError } from "../errors.ts"
-import { getFormat } from "../types.ts"
-import { render } from "../output/formatter.ts"
+import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import { requireTeam } from "../resolve.ts"
+import { getCommandContext } from "./_shared/context.ts"
 
 interface TeamSummary {
   key: string
@@ -14,8 +13,7 @@ interface TeamSummary {
   cyclesEnabled: boolean
 }
 
-async function loadTeams(apiKey: string): Promise<TeamSummary[]> {
-  const client = createClient(apiKey)
+async function loadTeams(client: LinearClient): Promise<TeamSummary[]> {
   const teamsConnection = await client.teams()
   return teamsConnection.nodes.map((team) => ({
     key: team.key,
@@ -25,8 +23,7 @@ async function loadTeams(apiKey: string): Promise<TeamSummary[]> {
   }))
 }
 
-async function findTeam(apiKey: string, key: string) {
-  const client = createClient(apiKey)
+async function findTeam(client: LinearClient, key: string) {
   const teamsConnection = await client.teams()
   const teams = teamsConnection.nodes
   const target = teams.find((t) => t.key.toLowerCase() === key.toLowerCase())
@@ -48,16 +45,15 @@ export const teamCommand = new Command()
       .description("List teams")
       .example("List all teams", "linear team list")
       .action(async (options) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const teams = await loadTeams(apiKey)
+        const { format, client } = await getCommandContext(options)
+        const payload = await loadTeams(client)
         if (format === "json") {
-          renderJson(teams)
+          renderJson(payload)
           return
         }
         render(format, {
           headers: ["Key", "Name", "Issues", "Cycles"],
-          rows: teams.map((entry) => [
+          rows: payload.map((entry) => [
             entry.key,
             entry.name,
             String(entry.issueCount),
@@ -74,12 +70,11 @@ export const teamCommand = new Command()
       .example("View a team", "linear team view POL")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const target = await findTeam(apiKey, key)
+        const { format, client } = await getCommandContext(options)
+        const target = await findTeam(client, key)
         const membersConnection = await target.members()
         const members = membersConnection.nodes
-        const details = {
+        const payload = {
           key: target.key,
           name: target.name,
           description: target.description ?? "-",
@@ -91,17 +86,17 @@ export const teamCommand = new Command()
             : "-",
         }
         if (format === "json") {
-          renderJson(details)
+          renderJson(payload)
           return
         }
         render(format, {
-          title: `${details.name} (${details.key})`,
+          title: `${payload.name} (${payload.key})`,
           fields: [
-            { label: "Description", value: details.description },
-            { label: "Issues", value: String(details.issues) },
-            { label: "Cycles", value: details.cycles },
-            { label: "Members", value: String(details.members) },
-            { label: "Created", value: details.createdAt },
+            { label: "Description", value: payload.description },
+            { label: "Issues", value: String(payload.issues) },
+            { label: "Cycles", value: payload.cycles },
+            { label: "Members", value: String(payload.members) },
+            { label: "Created", value: payload.createdAt },
           ],
         })
       }),
@@ -113,25 +108,22 @@ export const teamCommand = new Command()
       .example("List team members", "linear team members POL")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const target = await findTeam(apiKey, key)
+        const { format, client } = await getCommandContext(options)
+        const target = await findTeam(client, key)
         const membersConnection = await target.members()
-        const members = membersConnection.nodes
+        const payload = membersConnection.nodes.map((member) => ({
+          name: member.name,
+          email: member.email,
+          admin: member.admin ?? false,
+          active: member.active ?? true,
+        }))
         if (format === "json") {
-          renderJson(
-            members.map((member) => ({
-              name: member.name,
-              email: member.email,
-              admin: member.admin ?? false,
-              active: member.active ?? true,
-            })),
-          )
+          renderJson(payload)
           return
         }
         render(format, {
           headers: ["Name", "Email", "Admin", "Active"],
-          rows: members.map((member) => [
+          rows: payload.map((member) => [
             member.name ?? "Unknown",
             member.email ?? "-",
             member.admin ? "yes" : "no",
@@ -147,16 +139,15 @@ export const teamCommand = new Command()
       .example("Team overview", "linear team overview POL")
       .arguments("[key:string]")
       .action(async (options, key?: string) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
+        const { format, client } = await getCommandContext(options)
         // Positional arg takes precedence over --team flag
         const teamKey = key ?? requireTeam(options)
-        const client = createClient(apiKey)
-
-        const target = await findTeam(apiKey, teamKey)
+        const target = await findTeam(client, teamKey)
 
         // Progress indication for slow overview fetch
-        if (Deno.stderr.isTerminal()) Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
+        if (Deno.stderr.isTerminal()) {
+          Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
+        }
 
         // Fetch all active issues for the team
         const issues = await client.issues({
@@ -222,27 +213,38 @@ export const teamCommand = new Command()
           (sum, row) => sum + (row["Done"] ?? 0),
           0,
         )
+        const payload = {
+          teamKey,
+          matrix,
+          total,
+          inProgress,
+          done,
+        }
 
         if (format === "json") {
-          renderJson({ teamKey, matrix, total, inProgress, done })
+          renderJson(payload)
           return
         }
 
         if (format === "table") {
-          console.log(`${target.name} (${target.key}) — Overview\n`)
+          renderMessage(
+            format,
+            `${target.name} (${target.key}) — Overview\n`,
+          )
         }
 
         render(format, {
           headers: ["Assignee", ...stateTypes],
           rows: assignees.map((name) => [
             name,
-            ...stateTypes.map((s) => String(matrix[name][s] ?? 0)),
+            ...stateTypes.map((s) => String(payload.matrix[name][s] ?? 0)),
           ]),
         })
 
         if (format === "table") {
-          console.log(
-            `\nTotal: ${total} issues | ${inProgress} in progress | ${done} done`,
+          renderMessage(
+            format,
+            `\nTotal: ${payload.total} issues | ${payload.inProgress} in progress | ${payload.done} done`,
           )
         }
       }),
@@ -254,27 +256,24 @@ export const teamCommand = new Command()
       .example("List workflow states", "linear team states POL")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const target = await findTeam(apiKey, key)
+        const { format, client } = await getCommandContext(options)
+        const target = await findTeam(client, key)
         const statesConn = await target.states()
-        const states = statesConn.nodes
+        const payload = statesConn.nodes.map((s) => ({
+          name: s.name,
+          type: s.type,
+          color: s.color,
+          position: s.position,
+        }))
 
         if (format === "json") {
-          renderJson(
-            states.map((s) => ({
-              name: s.name,
-              type: s.type,
-              color: s.color,
-              position: s.position,
-            })),
-          )
+          renderJson(payload)
           return
         }
 
         render(format, {
           headers: ["Name", "Type", "Color", "Position"],
-          rows: states.map((s) => [
+          rows: payload.map((s) => [
             s.name,
             s.type,
             s.color,
@@ -290,26 +289,23 @@ export const teamCommand = new Command()
       .example("List team labels", "linear team labels POL")
       .arguments("<key:string>")
       .action(async (options, key: string) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const target = await findTeam(apiKey, key)
+        const { format, client } = await getCommandContext(options)
+        const target = await findTeam(client, key)
         const labelsConn = await target.labels()
-        const labels = labelsConn.nodes
+        const payload = labelsConn.nodes.map((l) => ({
+          name: l.name,
+          color: l.color,
+          description: l.description ?? "",
+        }))
 
         if (format === "json") {
-          renderJson(
-            labels.map((l) => ({
-              name: l.name,
-              color: l.color,
-              description: l.description ?? "",
-            })),
-          )
+          renderJson(payload)
           return
         }
 
         render(format, {
           headers: ["Name", "Color", "Description"],
-          rows: labels.map((l) => [
+          rows: payload.map((l) => [
             l.name,
             l.color,
             l.description ?? "-",

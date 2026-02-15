@@ -4,10 +4,15 @@ import { createClient } from "../client.ts"
 import { CliError } from "../errors.ts"
 import { getAPIKey } from "../auth.ts"
 import { getFormat } from "../types.ts"
-import { render, renderMessage } from "../output/formatter.ts"
+import { render } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import { readStdin, resolveInitiative, resolveUser } from "../resolve.ts"
 import { formatDate, relativeTime } from "../time.ts"
+import { getCommandContext } from "./_shared/context.ts"
+import {
+  buildMutationResult,
+  renderMutationOutput,
+} from "./_shared/mutation_output.ts"
 
 // Linear API uses "status" for initiatives (vs "state" for issues)
 const listCommand = new Command()
@@ -86,69 +91,73 @@ const viewCommand = new Command()
     const owner = await initiative.owner
     const creator = await initiative.creator
     const projects = await initiative.projects()
+    const payload = {
+      id: initiative.id,
+      name: initiative.name,
+      description: initiative.description ?? null,
+      status: initiative.status,
+      owner: owner?.name ?? null,
+      creator: creator?.name ?? null,
+      targetDate: initiative.targetDate ?? null,
+      health: initiative.health ?? null,
+      url: initiative.url,
+      createdAt: initiative.createdAt,
+      updatedAt: initiative.updatedAt,
+      projects: projects.nodes.map((p) => p.name),
+    }
 
     if (format === "json") {
-      renderJson({
-        id: initiative.id,
-        name: initiative.name,
-        description: initiative.description ?? null,
-        status: initiative.status,
-        owner: owner?.name ?? null,
-        creator: creator?.name ?? null,
-        targetDate: initiative.targetDate ?? null,
-        health: initiative.health ?? null,
-        url: initiative.url,
-        createdAt: initiative.createdAt,
-        updatedAt: initiative.updatedAt,
-        projects: projects.nodes.map((p) => p.name),
-      })
+      renderJson(payload)
       return
     }
 
     if (format === "compact") {
       const lines = [
-        `name\t${initiative.name}`,
-        `status\t${initiative.status}`,
-        `owner\t${owner?.name ?? "-"}`,
-        `target\t${initiative.targetDate ?? "-"}`,
-        `health\t${initiative.health ?? "-"}`,
-        `projects\t${projects.nodes.map((p) => p.name).join(", ") || "-"}`,
-        `url\t${initiative.url}`,
+        `name\t${payload.name}`,
+        `status\t${payload.status}`,
+        `owner\t${payload.owner ?? "-"}`,
+        `target\t${payload.targetDate ?? "-"}`,
+        `health\t${payload.health ?? "-"}`,
+        `projects\t${payload.projects.join(", ") || "-"}`,
+        `url\t${payload.url}`,
       ]
       console.log(lines.join("\n"))
       return
     }
 
     render("table", {
-      title: initiative.name,
+      title: payload.name,
       fields: [
-        { label: "Status", value: initiative.status },
-        { label: "Owner", value: owner?.name ?? "-" },
-        { label: "Creator", value: creator?.name ?? "-" },
-        { label: "Target", value: initiative.targetDate ?? "-" },
-        { label: "Health", value: initiative.health ?? "-" },
+        { label: "Status", value: payload.status },
+        { label: "Owner", value: payload.owner ?? "-" },
+        { label: "Creator", value: payload.creator ?? "-" },
+        { label: "Target", value: payload.targetDate ?? "-" },
+        { label: "Health", value: payload.health ?? "-" },
         {
           label: "Projects",
-          value: projects.nodes.map((p) => p.name).join(", ") || "-",
+          value: payload.projects.join(", ") || "-",
         },
         {
           label: "Created",
-          value: `${formatDate(initiative.createdAt)} (${
-            relativeTime(initiative.createdAt)
+          value: `${formatDate(payload.createdAt)} (${
+            relativeTime(payload.createdAt)
           })`,
         },
-        { label: "URL", value: initiative.url },
+        { label: "URL", value: payload.url },
       ],
     })
 
-    if (initiative.description) {
-      console.log(`\n${initiative.description}`)
+    if (payload.description) {
+      console.log(`\n${payload.description}`)
     }
   })
 
 const createCommand = new Command()
   .description("Create initiative")
-  .example("Create an initiative", "linear initiative create --name 'Q1 Goals' --status active")
+  .example(
+    "Create an initiative",
+    "linear initiative create --name 'Q1 Goals' --status active",
+  )
   .option("--name <name:string>", "Initiative name", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("--owner <name:string>", "Initiative owner")
@@ -158,9 +167,7 @@ const createCommand = new Command()
   )
   .option("--target-date <date:string>", "Target date (YYYY-MM-DD)")
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const content = options.description ?? await readStdin()
 
@@ -199,20 +206,25 @@ const createCommand = new Command()
       throw new CliError("failed to create initiative", 1)
     }
 
-    if (format === "json") {
-      renderJson({ name: initiative.name, url: initiative.url })
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `Created initiative: ${initiative.name}\n${initiative.url}`,
-    )
+      result: buildMutationResult({
+        id: initiative.id,
+        entity: "initiative",
+        action: "create",
+        status: "success",
+        url: initiative.url,
+        metadata: { name: initiative.name },
+      }),
+    })
   })
 
 const updateCommand = new Command()
   .description("Update initiative")
-  .example("Update status", "linear initiative update 'Q1 Goals' --status completed")
+  .example(
+    "Update status",
+    "linear initiative update 'Q1 Goals' --status completed",
+  )
   .arguments("<name:string>")
   .option("--name <name:string>", "New name")
   .option("-d, --description <desc:string>", "New description")
@@ -223,9 +235,7 @@ const updateCommand = new Command()
   )
   .option("--target-date <date:string>", "New target date (YYYY-MM-DD)")
   .action(async (options, currentName: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const initiative = await resolveInitiative(client, currentName)
 
@@ -262,26 +272,21 @@ const updateCommand = new Command()
     const updated = await client.initiative(initiative.id)
     const updatedOwner = await updated.owner
 
-    if (format === "json") {
-      renderJson({
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
         id: updated.id,
-        name: updated.name,
-        status: updated.status,
-        owner: updatedOwner?.name ?? null,
-        targetDate: updated.targetDate ?? null,
+        entity: "initiative",
+        action: "update",
+        status: "success",
         url: updated.url,
-      })
-      return
-    }
-
-    render(format === "table" ? "table" : "compact", {
-      title: updated.name,
-      fields: [
-        { label: "Status", value: updated.status },
-        { label: "Owner", value: updatedOwner?.name ?? "-" },
-        { label: "Target", value: updated.targetDate ?? "-" },
-        { label: "URL", value: updated.url },
-      ],
+        metadata: {
+          name: updated.name,
+          status: updated.status,
+          owner: updatedOwner?.name ?? null,
+          targetDate: updated.targetDate ?? null,
+        },
+      }),
     })
   })
 
@@ -291,28 +296,46 @@ const startCommand = new Command()
   .description("Start initiative (set status to active)")
   .example("Start an initiative", "linear initiative start 'Q1 Goals'")
   .arguments("<name:string>")
-  .action(async (_options, name: string) => {
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+  .action(async (options, name: string) => {
+    const { format, client } = await getCommandContext(options)
     const initiative = await resolveInitiative(client, name)
     await client.updateInitiative(initiative.id, {
       status: InitiativeStatus.Active,
     })
-    console.log(`${initiative.name} started`)
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: initiative.id,
+        entity: "initiative",
+        action: "start",
+        status: "success",
+        url: initiative.url,
+        metadata: { name: initiative.name },
+      }),
+    })
   })
 
 const completeInitiativeCommand = new Command()
   .description("Complete initiative (set status to completed)")
   .example("Complete an initiative", "linear initiative complete 'Q1 Goals'")
   .arguments("<name:string>")
-  .action(async (_options, name: string) => {
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+  .action(async (options, name: string) => {
+    const { format, client } = await getCommandContext(options)
     const initiative = await resolveInitiative(client, name)
     await client.updateInitiative(initiative.id, {
       status: InitiativeStatus.Completed,
     })
-    console.log(`${initiative.name} completed`)
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: initiative.id,
+        entity: "initiative",
+        action: "complete",
+        status: "success",
+        url: initiative.url,
+        metadata: { name: initiative.name },
+      }),
+    })
   })
 
 export const initiativeCommand = new Command()

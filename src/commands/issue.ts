@@ -1,16 +1,11 @@
 import { Command } from "@cliffy/command"
 import { type LinearClient, PaginationOrderBy } from "@linear/sdk"
-import { createClient } from "../client.ts"
 // Exit codes: 0 success, 1 runtime error, 2 auth error, 3 not found, 4 validation/usage
 import { CliError } from "../errors.ts"
-import { getAPIKey } from "../auth.ts"
-import { getFormat } from "../types.ts"
-import type { GlobalOptions } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import {
   readStdin,
-  requireTeam,
   resolveIssue,
   resolveLabel,
   resolvePriority,
@@ -21,6 +16,12 @@ import {
 } from "../resolve.ts"
 import { compactTime, formatDate, relativeTime } from "../time.ts"
 import { renderMarkdown } from "../output/markdown.ts"
+import { confirmDangerousAction } from "./_shared/confirm.ts"
+import { getCommandContext } from "./_shared/context.ts"
+import {
+  buildMutationResult,
+  renderMutationOutput,
+} from "./_shared/mutation_output.ts"
 
 function priorityIndicator(priority: number): string {
   switch (priority) {
@@ -70,8 +71,14 @@ const listCommand = new Command()
   .option("-U, --unassigned", "Show only unassigned")
   .option("-l, --label <name:string>", "Filter by label", { collect: true })
   .option("-p, --project <name:string>", "Filter by project")
-  .option("--priority <priority:string>", "Filter by priority: urgent, high, medium, low, none (or 0-4)")
-  .option("--cycle <cycle:string>", "Filter by cycle: current, next, or cycle number")
+  .option(
+    "--priority <priority:string>",
+    "Filter by priority: urgent, high, medium, low, none (or 0-4)",
+  )
+  .option(
+    "--cycle <cycle:string>",
+    "Filter by cycle: current, next, or cycle number",
+  )
   .option("--due <date:string>", "Issues due on or before date (YYYY-MM-DD)")
   .option("--overdue", "Show only overdue issues (past due date)")
   .option("--sort <field:string>", "Sort: updated, created, priority", {
@@ -83,10 +90,9 @@ const listCommand = new Command()
     hidden: true,
   })
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = requireTeam(options)
+    const { format, client, teamKey } = await getCommandContext(options, {
+      requireTeam: true,
+    })
 
     // --- Resolve all filter values ---
 
@@ -126,17 +132,25 @@ const listCommand = new Command()
         (t: { key: string }) => t.key.toLowerCase() === teamKey.toLowerCase(),
       )
       if (!team) {
-        throw new CliError(`team not found: "${teamKey}"`, 3, "check team key with: linear team list")
+        throw new CliError(
+          `team not found: "${teamKey}"`,
+          3,
+          "check team key with: linear team list",
+        )
       }
       const cycles = await team.cycles()
       const now = new Date()
 
       if (options.cycle === "current") {
-        const current = cycles.nodes.find((c: { startsAt: Date; endsAt: Date }) =>
-          new Date(c.startsAt) <= now && now <= new Date(c.endsAt)
-        )
+        const current = cycles.nodes.find((
+          c: { startsAt: Date; endsAt: Date },
+        ) => new Date(c.startsAt) <= now && now <= new Date(c.endsAt))
         if (!current) {
-          throw new CliError("no active cycle found", 3, "list cycles with: linear cycle list --team " + teamKey)
+          throw new CliError(
+            "no active cycle found",
+            3,
+            "list cycles with: linear cycle list --team " + teamKey,
+          )
         }
         cycleId = current.id
       } else if (options.cycle === "next") {
@@ -146,7 +160,11 @@ const listCommand = new Command()
             new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
           )
         if (future.length === 0) {
-          throw new CliError("no upcoming cycle found", 3, "list cycles with: linear cycle list --team " + teamKey)
+          throw new CliError(
+            "no upcoming cycle found",
+            3,
+            "list cycles with: linear cycle list --team " + teamKey,
+          )
         }
         cycleId = future[0].id
       } else {
@@ -158,9 +176,15 @@ const listCommand = new Command()
             "--cycle current, --cycle next, or --cycle <number>",
           )
         }
-        const match = cycles.nodes.find((c: { number: number }) => c.number === num)
+        const match = cycles.nodes.find((c: { number: number }) =>
+          c.number === num
+        )
         if (!match) {
-          throw new CliError(`cycle #${num} not found`, 3, "list cycles with: linear cycle list --team " + teamKey)
+          throw new CliError(
+            `cycle #${num} not found`,
+            3,
+            "list cycles with: linear cycle list --team " + teamKey,
+          )
         }
         cycleId = match.id
       }
@@ -185,13 +209,17 @@ const listCommand = new Command()
       ...(options.unassigned && !assigneeName && { assignee: { null: true } }),
       ...(labelIds && { labels: { id: { in: labelIds } } }),
       ...(projectId && { project: { id: { eq: projectId } } }),
-      ...(options.priority && { priority: { eq: resolvePriority(options.priority) } }),
+      ...(options.priority &&
+        { priority: { eq: resolvePriority(options.priority) } }),
       ...(cycleId && { cycle: { id: { eq: cycleId } } }),
       ...(dueDate && { dueDate }),
     }
 
     // Normalize human-friendly sort values
-    const sortMap: Record<string, string> = { updated: "updatedAt", created: "createdAt" }
+    const sortMap: Record<string, string> = {
+      updated: "updatedAt",
+      created: "createdAt",
+    }
     const sortField = sortMap[options.sort] ?? options.sort
 
     // Order
@@ -200,7 +228,9 @@ const listCommand = new Command()
       : PaginationOrderBy.UpdatedAt
 
     // Progress indication for slow list fetch
-    if (Deno.stderr.isTerminal()) Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
+    if (Deno.stderr.isTerminal()) {
+      Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
+    }
 
     const issues = await client.issues({
       filter,
@@ -301,10 +331,8 @@ const viewCommand = new Command()
   .arguments("<id:string>")
   .option("-v, --verbose", "Show full agent activity log")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const state = await issue.state
@@ -329,14 +357,12 @@ const viewCommand = new Command()
         const activities = await session.activities()
         // Find the last response activity (the summary/result)
         const responseActivity = activities.nodes.find(
-          (a) =>
-            a.content.__typename === "AgentActivityResponseContent",
+          (a) => a.content.__typename === "AgentActivityResponseContent",
         )
-        const summary =
-          responseActivity?.content.__typename ===
-              "AgentActivityResponseContent"
-            ? responseActivity.content.body
-            : null
+        const summary = responseActivity?.content.__typename ===
+            "AgentActivityResponseContent"
+          ? responseActivity.content.body
+          : null
         sessions.push({
           agent: appUser?.name ?? "Unknown",
           status: session.status,
@@ -344,7 +370,9 @@ const viewCommand = new Command()
           summary,
           // externalUrls is typed as Record<string, unknown> in SDK but is actually { url: string }[]
           externalUrl: session.externalLinks?.[0]?.url ??
-            (session.externalUrls as unknown as { url?: string }[] | undefined)?.[0]?.url ?? null,
+            (session.externalUrls as unknown as { url?: string }[] | undefined)
+              ?.[0]?.url ??
+            null,
           activities: (options as { verbose?: boolean }).verbose
             ? activities.nodes.map((a) => ({
               type: a.content.__typename
@@ -360,57 +388,60 @@ const viewCommand = new Command()
       }
     }
 
+    const commentData = await Promise.all(
+      comments.map(async (c) => {
+        const user = await c.user
+        return {
+          author: user?.name ?? "Unknown",
+          body: c.body,
+          createdAt: c.createdAt,
+        }
+      }),
+    )
+
+    const payload = {
+      id: issue.identifier,
+      title: issue.title,
+      state: state?.name ?? "-",
+      priority: priorityName(issue.priority),
+      assignee: assignee?.name ?? null,
+      delegate: delegate?.name ?? null,
+      labels: labels.map((l) => l.name),
+      project: project?.name ?? null,
+      cycle: cycle?.name ?? null,
+      createdAt: issue.createdAt,
+      updatedAt: issue.updatedAt,
+      url: issue.url,
+      branchName: branchName ?? null,
+      description: issue.description ?? null,
+      comments: commentData,
+      agentSessions: sessions,
+    }
+
     if (format === "json") {
-      const commentData = await Promise.all(
-        comments.map(async (c) => {
-          const user = await c.user
-          return {
-            author: user?.name ?? "Unknown",
-            body: c.body,
-            createdAt: c.createdAt,
-          }
-        }),
-      )
-      renderJson({
-        id: issue.identifier,
-        title: issue.title,
-        state: state?.name ?? "-",
-        priority: priorityName(issue.priority),
-        assignee: assignee?.name ?? null,
-        delegate: delegate?.name ?? null,
-        labels: labels.map((l) => l.name),
-        project: project?.name ?? null,
-        cycle: cycle?.name ?? null,
-        createdAt: issue.createdAt,
-        updatedAt: issue.updatedAt,
-        url: issue.url,
-        branchName: branchName ?? null,
-        description: issue.description ?? null,
-        comments: commentData,
-        agentSessions: sessions,
-      })
+      renderJson(payload)
       return
     }
 
     if (format === "compact") {
       const lines = [
-        `id\t${issue.identifier}`,
-        `title\t${issue.title}`,
-        `state\t${state?.name ?? "-"}`,
-        `priority\t${priorityName(issue.priority)}`,
-        `assignee\t${assignee?.name ?? "-"}`,
-        `delegate\t${delegate?.name ?? "-"}`,
-        `labels\t${labels.length ? labels.map((l) => l.name).join(", ") : "-"}`,
-        `project\t${project?.name ?? "-"}`,
-        `cycle\t${cycle?.name ?? "-"}`,
-        `created\t${new Date(issue.createdAt).toISOString()}`,
-        `updated\t${new Date(issue.updatedAt).toISOString()}`,
-        `url\t${issue.url}`,
-        `branch\t${branchName ?? "-"}`,
-        `description\t${issue.description ?? "-"}`,
+        `id\t${payload.id}`,
+        `title\t${payload.title}`,
+        `state\t${payload.state}`,
+        `priority\t${payload.priority}`,
+        `assignee\t${payload.assignee ?? "-"}`,
+        `delegate\t${payload.delegate ?? "-"}`,
+        `labels\t${payload.labels.length ? payload.labels.join(", ") : "-"}`,
+        `project\t${payload.project ?? "-"}`,
+        `cycle\t${payload.cycle ?? "-"}`,
+        `created\t${new Date(payload.createdAt).toISOString()}`,
+        `updated\t${new Date(payload.updatedAt).toISOString()}`,
+        `url\t${payload.url}`,
+        `branch\t${payload.branchName ?? "-"}`,
+        `description\t${payload.description ?? "-"}`,
       ]
-      if (sessions.length > 0) {
-        for (const session of sessions) {
+      if (payload.agentSessions.length > 0) {
+        for (const session of payload.agentSessions) {
           lines.push(
             `agent_session\t${session.agent}\t${session.status}\t${
               session.summary?.replace(/\n/g, " ").slice(0, 200) ?? "-"
@@ -424,56 +455,55 @@ const viewCommand = new Command()
 
     // Table format — detail view
     render("table", {
-      title: `${issue.identifier}: ${issue.title}`,
+      title: `${payload.id}: ${payload.title}`,
       fields: [
-        { label: "State", value: state?.name ?? "-" },
-        { label: "Priority", value: priorityName(issue.priority) },
-        { label: "Assignee", value: assignee?.name ?? "-" },
-        { label: "Delegate", value: delegate?.name ?? "-" },
+        { label: "State", value: payload.state },
+        { label: "Priority", value: payload.priority },
+        { label: "Assignee", value: payload.assignee ?? "-" },
+        { label: "Delegate", value: payload.delegate ?? "-" },
         {
           label: "Labels",
-          value: labels.length ? labels.map((l) => l.name).join(", ") : "-",
+          value: payload.labels.length ? payload.labels.join(", ") : "-",
         },
-        { label: "Project", value: project?.name ?? "-" },
-        { label: "Cycle", value: cycle?.name ?? "-" },
+        { label: "Project", value: payload.project ?? "-" },
+        { label: "Cycle", value: payload.cycle ?? "-" },
         {
           label: "Created",
-          value: `${formatDate(issue.createdAt)} (${
-            relativeTime(issue.createdAt)
+          value: `${formatDate(payload.createdAt)} (${
+            relativeTime(payload.createdAt)
           })`,
         },
         {
           label: "Updated",
-          value: `${formatDate(issue.updatedAt)} (${
-            relativeTime(issue.updatedAt)
+          value: `${formatDate(payload.updatedAt)} (${
+            relativeTime(payload.updatedAt)
           })`,
         },
-        { label: "URL", value: issue.url },
-        { label: "Branch", value: branchName ?? "-" },
+        { label: "URL", value: payload.url },
+        { label: "Branch", value: payload.branchName ?? "-" },
       ],
     })
 
-    if (issue.description) {
+    if (payload.description) {
       console.log(
-        `\nDescription:\n${renderMarkdown(issue.description)}`,
+        `\nDescription:\n${renderMarkdown(payload.description)}`,
       )
     }
 
-    if (comments.length > 0) {
-      console.log(`\nComments (${comments.length}):`)
-      for (const comment of comments) {
-        const user = await comment.user
+    if (payload.comments.length > 0) {
+      console.log(`\nComments (${payload.comments.length}):`)
+      for (const comment of payload.comments) {
         console.log(
-          `\n${user?.name ?? "Unknown"} (${
-            relativeTime(comment.createdAt)
-          }):\n${renderMarkdown(comment.body, { indent: "  " })}`,
+          `\n${comment.author} (${relativeTime(comment.createdAt)}):\n${
+            renderMarkdown(comment.body, { indent: "  " })
+          }`,
         )
       }
     }
 
-    if (sessions.length > 0) {
-      console.log(`\nAgent Sessions (${sessions.length}):`)
-      for (const session of sessions) {
+    if (payload.agentSessions.length > 0) {
+      console.log(`\nAgent Sessions (${payload.agentSessions.length}):`)
+      for (const session of payload.agentSessions) {
         const statusLabel = session.status === "complete"
           ? "complete"
           : session.status === "awaitingInput"
@@ -509,8 +539,14 @@ const viewCommand = new Command()
 
 const createCommand = new Command()
   .description("Create issue")
-  .example("Create a bug", "linear issue create --team POL --title 'Login crash' --priority urgent --label bug")
-  .example("Create and assign to me", "linear issue create --team POL --title 'Fix tests' --assignee me")
+  .example(
+    "Create a bug",
+    "linear issue create --team POL --title 'Login crash' --priority urgent --label bug",
+  )
+  .example(
+    "Create and assign to me",
+    "linear issue create --team POL --title 'Fix tests' --assignee me",
+  )
   .option("--title <title:string>", "Issue title", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("-a, --assignee <name:string>", "Assignee name or 'me'")
@@ -525,10 +561,9 @@ const createCommand = new Command()
   .option("-p, --project <name:string>", "Project name")
   .option("--parent <id:string>", "Parent issue identifier")
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = requireTeam(options)
+    const { format, client, teamKey } = await getCommandContext(options, {
+      requireTeam: true,
+    })
     const teamId = await resolveTeamId(client, teamKey)
 
     // Description: flag → stdin → undefined
@@ -576,19 +611,17 @@ const createCommand = new Command()
       throw new CliError("failed to create issue", 1)
     }
 
-    if (format === "json") {
-      renderJson({
-        id: issue.identifier,
-        title: issue.title,
-        url: issue.url,
-      })
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `Created ${issue.identifier}: ${issue.title}\n${issue.url}`,
-    )
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "create",
+        status: "success",
+        url: issue.url,
+        metadata: { title: issue.title },
+      }),
+    })
     if (format === "table") {
       console.error(`  assign: linear issue assign ${issue.identifier}`)
     }
@@ -614,10 +647,8 @@ const updateCommand = new Command()
   .option("-p, --project <name:string>", "Move to project")
   .option("--parent <id:string>", "Set parent issue")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
 
@@ -625,7 +656,9 @@ const updateCommand = new Command()
     const description = options.description ?? (await readStdin())
 
     const assigneeId = options.assignee !== undefined
-      ? (options.assignee === "" ? null : await resolveUser(client, options.assignee))
+      ? (options.assignee === ""
+        ? null
+        : await resolveUser(client, options.assignee))
       : undefined
 
     const stateName = options.state ?? options.status
@@ -694,31 +727,22 @@ const updateCommand = new Command()
     const updatedAssignee = await updated.assignee
     const updatedDelegate = await updated.delegate
 
-    if (format === "json") {
-      renderJson({
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
         id: updated.identifier,
-        title: updated.title,
-        state: updatedState?.name ?? "-",
-        assignee: updatedAssignee?.name ?? null,
-        delegate: updatedDelegate?.name ?? null,
+        entity: "issue",
+        action: "update",
+        status: "success",
         url: updated.url,
-      })
-      return
-    }
-
-    const fields = [
-      { label: "State", value: updatedState?.name ?? "-" },
-      { label: "Priority", value: priorityName(updated.priority) },
-      { label: "Assignee", value: updatedAssignee?.name ?? "-" },
-    ]
-    if (updatedDelegate) {
-      fields.push({ label: "Delegate", value: updatedDelegate.name })
-    }
-    fields.push({ label: "URL", value: updated.url })
-
-    render(format === "table" ? "table" : "compact", {
-      title: `${updated.identifier}: ${updated.title}`,
-      fields,
+        metadata: {
+          title: updated.title,
+          state: updatedState?.name ?? "-",
+          priority: priorityName(updated.priority),
+          assignee: updatedAssignee?.name ?? null,
+          delegate: updatedDelegate?.name ?? null,
+        },
+      }),
     })
   })
 
@@ -729,47 +753,40 @@ const deleteCommand = new Command()
   .arguments("<id:string>")
   .option("-y, --yes", "Skip confirmation prompt")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client, noInput } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
 
-    // Skip confirmation if --yes or --no-input
-    const skipConfirm = (options as { yes?: boolean }).yes ||
-      (options as unknown as GlobalOptions).noInput
-    if (!skipConfirm && Deno.stdin.isTerminal()) {
-      const buf = new Uint8Array(10)
-      const encoder = new TextEncoder()
-      await Deno.stdout.write(
-        encoder.encode(
-          `Delete ${issue.identifier} "${issue.title}"? [y/N] `,
-        ),
-      )
-      const n = await Deno.stdin.read(buf)
-      const answer = new TextDecoder().decode(buf.subarray(0, n ?? 0)).trim()
-      if (answer.toLowerCase() !== "y") {
-        renderMessage(format, "Canceled")
-        return
-      }
+    const confirmed = await confirmDangerousAction({
+      prompt: `Delete ${issue.identifier} "${issue.title}"?`,
+      skipConfirm: Boolean((options as { yes?: boolean }).yes) || noInput,
+    })
+    if (!confirmed) {
+      renderMessage(format, "Canceled")
+      return
     }
 
     await client.archiveIssue(issue.id)
-    renderMessage(
+    renderMutationOutput({
       format,
-      `Deleted ${issue.identifier}: ${issue.title}`,
-    )
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "delete",
+        status: "success",
+        url: issue.url,
+        metadata: { title: issue.title },
+      }),
+    })
   })
 
 const commentListCommand = new Command()
   .description("List comments on issue")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const commentsConn = await issue.comments()
@@ -817,10 +834,8 @@ async function addComment(
   id: string,
   bodyArg?: string,
 ): Promise<void> {
-  const format = getFormat(options)
-  const apiKey = await getAPIKey()
-  const client = createClient(apiKey)
-  const teamKey = (options as GlobalOptions).team
+  const { format, client } = await getCommandContext(options)
+  const teamKey = (options as unknown as { team?: string }).team
 
   const issue = await resolveIssue(client, id, teamKey)
 
@@ -869,19 +884,18 @@ const branchCommand = new Command()
   .example("Get branch name", "linear issue branch POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
+    const payload = { branchName: issue.branchName }
 
     if (format === "json") {
-      renderJson({ branchName: issue.branchName })
+      renderJson(payload)
       return
     }
 
-    console.log(issue.branchName)
+    renderMessage(format, payload.branchName)
   })
 
 const closeCommand = new Command()
@@ -890,9 +904,8 @@ const closeCommand = new Command()
   .example("Close an issue", "linear issue close POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const state = await issue.state
@@ -910,7 +923,17 @@ const closeCommand = new Command()
     }
 
     await client.updateIssue(issue.id, { stateId: completed.id })
-    console.log(`${issue.identifier} closed (${completed.name})`)
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "close",
+        status: "success",
+        url: issue.url,
+        metadata: { state: completed.name },
+      }),
+    })
   })
 
 const reopenCommand = new Command()
@@ -919,9 +942,8 @@ const reopenCommand = new Command()
   .example("Reopen an issue", "linear issue reopen POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const state = await issue.state
@@ -939,8 +961,18 @@ const reopenCommand = new Command()
     }
 
     await client.updateIssue(issue.id, { stateId: unstarted.id })
-    console.log(`${issue.identifier} reopened (${unstarted.name})`)
-    if (getFormat(options) === "table") {
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "reopen",
+        status: "success",
+        url: issue.url,
+        metadata: { state: unstarted.name },
+      }),
+    })
+    if (format === "table") {
       console.error(`  assign: linear issue assign ${issue.identifier}`)
     }
   })
@@ -951,9 +983,8 @@ const startCommand = new Command()
   .example("Start working on issue", "linear issue start POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const state = await issue.state
@@ -971,8 +1002,18 @@ const startCommand = new Command()
     }
 
     await client.updateIssue(issue.id, { stateId: started.id })
-    console.log(`${issue.identifier} started (${started.name})`)
-    if (getFormat(options) === "table") {
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "start",
+        status: "success",
+        url: issue.url,
+        metadata: { state: started.name },
+      }),
+    })
+    if (format === "table") {
       console.error(`  close when done: linear issue close ${issue.identifier}`)
     }
   })
@@ -983,9 +1024,8 @@ const assignCommand = new Command()
   .example("Assign to someone", "linear issue assign POL-5 'Jane Smith'")
   .arguments("<id:string> [user:string]")
   .action(async (options, id: string, user?: string) => {
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const assigneeName = user ?? "me"
@@ -1005,8 +1045,18 @@ const assignCommand = new Command()
       displayName = assignee?.name ?? assigneeName
     }
 
-    console.log(`${issue.identifier} assigned to ${displayName}`)
-    if (getFormat(options) === "table") {
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "assign",
+        status: "success",
+        url: issue.url,
+        metadata: { assignee: displayName },
+      }),
+    })
+    if (format === "table") {
       console.error(`  start: linear issue start ${issue.identifier}`)
     }
   })
@@ -1052,10 +1102,8 @@ const watchCommand = new Command()
     default: 0,
   })
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const interval = (options.interval ?? 15) * 1000
@@ -1075,14 +1123,12 @@ const watchCommand = new Command()
         const appUser = await session.appUser
         const activities = await session.activities()
         const responseActivity = activities.nodes.find(
-          (a) =>
-            a.content.__typename === "AgentActivityResponseContent",
+          (a) => a.content.__typename === "AgentActivityResponseContent",
         )
-        const summary =
-          responseActivity?.content.__typename ===
-              "AgentActivityResponseContent"
-            ? responseActivity.content.body
-            : null
+        const summary = responseActivity?.content.__typename ===
+            "AgentActivityResponseContent"
+          ? responseActivity.content.body
+          : null
 
         const result = {
           issue: issue.identifier,
@@ -1091,7 +1137,9 @@ const watchCommand = new Command()
           summary,
           // externalUrls is typed as Record<string, unknown> in SDK but is actually { url: string }[]
           externalUrl: session.externalLinks?.[0]?.url ??
-            (session.externalUrls as unknown as { url?: string }[] | undefined)?.[0]?.url ?? null,
+            (session.externalUrls as unknown as { url?: string }[] | undefined)
+              ?.[0]?.url ??
+            null,
           elapsed: Math.round((Date.now() - start) / 1000),
         }
 
@@ -1099,7 +1147,9 @@ const watchCommand = new Command()
           renderJson(result)
         } else if (format === "compact") {
           console.log(
-            `${result.issue}\t${result.agent}\t${result.status}\t${result.elapsed}s\t${result.summary?.replace(/\n/g, " ").slice(0, 200) ?? "-"}\t${result.externalUrl ?? "-"}`,
+            `${result.issue}\t${result.agent}\t${result.status}\t${result.elapsed}s\t${
+              result.summary?.replace(/\n/g, " ").slice(0, 200) ?? "-"
+            }\t${result.externalUrl ?? "-"}`,
           )
         } else {
           console.log(
@@ -1124,16 +1174,19 @@ const watchCommand = new Command()
       // Timeout check
       if (timeout > 0 && Date.now() - start > timeout) {
         const status = session ? session.status : "no session"
+        const timeoutPayload = {
+          issue: issue.identifier,
+          status: "timeout",
+          lastSessionStatus: status,
+          elapsed: Math.round((Date.now() - start) / 1000),
+        }
         if (format === "json") {
-          renderJson({
-            issue: issue.identifier,
-            status: "timeout",
-            lastSessionStatus: status,
-            elapsed: Math.round((Date.now() - start) / 1000),
-          })
+          renderJson(timeoutPayload)
         } else {
           console.error(
-            `Timeout: ${issue.identifier} still ${status} after ${Math.round((Date.now() - start) / 1000)}s`,
+            `Timeout: ${issue.identifier} still ${status} after ${
+              Math.round((Date.now() - start) / 1000)
+            }s`,
           )
         }
         Deno.exit(124)

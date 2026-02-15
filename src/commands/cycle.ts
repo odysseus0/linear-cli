@@ -1,56 +1,55 @@
 import { Command } from "@cliffy/command"
-import { createClient } from "../client.ts"
 import { CliError } from "../errors.ts"
-import { getAPIKey } from "../auth.ts"
-import { getFormat } from "../types.ts"
 import { render } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
-import { requireTeam } from "../resolve.ts"
 import { formatDate, relativeTime } from "../time.ts"
+import { getCommandContext } from "./_shared/context.ts"
 
 const listCommand = new Command()
   .description("List cycles")
   .example("List team cycles", "linear cycle list --team POL")
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = requireTeam(options)
+    const { format, client, teamKey } = await getCommandContext(options, {
+      requireTeam: true,
+    })
 
     const teams = await client.teams()
     const team = teams.nodes.find(
       (t) => t.key.toLowerCase() === teamKey.toLowerCase(),
     )
     if (!team) {
-      throw new CliError(`team not found: "${teamKey}"`, 3, "check team key with: linear team list")
+      throw new CliError(
+        `team not found: "${teamKey}"`,
+        3,
+        "check team key with: linear team list",
+      )
     }
 
     const cycles = await team.cycles()
     const items = cycles.nodes.sort(
       (a, b) => (a.number ?? 0) - (b.number ?? 0),
     )
+    const payload = items.map((c) => ({
+      number: c.number,
+      name: c.name ?? `Sprint ${c.number}`,
+      startsAt: c.startsAt,
+      endsAt: c.endsAt,
+      progress: Math.round((c.progress ?? 0) * 100),
+    }))
 
     if (format === "json") {
-      renderJson(
-        items.map((c) => ({
-          number: c.number,
-          name: c.name ?? `Sprint ${c.number}`,
-          startsAt: c.startsAt,
-          endsAt: c.endsAt,
-          progress: Math.round((c.progress ?? 0) * 100),
-        })),
-      )
+      renderJson(payload)
       return
     }
 
     render(format, {
       headers: ["#", "Name", "Starts", "Ends", "Progress"],
-      rows: items.map((c) => [
+      rows: payload.map((c) => [
         String(c.number ?? "-"),
-        c.name ?? `Sprint ${c.number}`,
+        c.name ?? "-",
         c.startsAt ? formatDate(c.startsAt) : "-",
         c.endsAt ? formatDate(c.endsAt) : "-",
-        `${Math.round((c.progress ?? 0) * 100)}%`,
+        `${c.progress}%`,
       ]),
     })
   })
@@ -60,23 +59,30 @@ const viewCommand = new Command()
   .example("View a cycle", "linear cycle view 3 --team POL")
   .arguments("<number:integer>")
   .action(async (options, number: number) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = requireTeam(options)
+    const { format, client, teamKey } = await getCommandContext(options, {
+      requireTeam: true,
+    })
 
     const teams = await client.teams()
     const team = teams.nodes.find(
       (t) => t.key.toLowerCase() === teamKey.toLowerCase(),
     )
     if (!team) {
-      throw new CliError(`team not found: "${teamKey}"`, 3, "check team key with: linear team list")
+      throw new CliError(
+        `team not found: "${teamKey}"`,
+        3,
+        "check team key with: linear team list",
+      )
     }
 
     const cycles = await team.cycles()
     const cycle = cycles.nodes.find((c) => c.number === number)
     if (!cycle) {
-      throw new CliError(`cycle #${number} not found`, 3, "list cycles with: linear cycle list --team <key>")
+      throw new CliError(
+        `cycle #${number} not found`,
+        3,
+        "list cycles with: linear cycle list --team <key>",
+      )
     }
 
     const issues = await cycle.issues()
@@ -99,54 +105,54 @@ const viewCommand = new Command()
     )
     const totalCount = issues.nodes.length
     const cycleName = cycle.name ?? `Sprint ${cycle.number}`
+    const payload = {
+      number: cycle.number,
+      name: cycleName,
+      startsAt: cycle.startsAt ?? null,
+      endsAt: cycle.endsAt ?? null,
+      progressPercent: Math.round((cycle.progress ?? 0) * 100),
+      progressSummary: `${
+        Math.round((cycle.progress ?? 0) * 100)
+      }% (${completedCount}/${totalCount})`,
+      issues: issueRows,
+    }
 
     if (format === "json") {
-      renderJson({
-        number: cycle.number,
-        name: cycleName,
-        startsAt: cycle.startsAt,
-        endsAt: cycle.endsAt,
-        progress: Math.round((cycle.progress ?? 0) * 100),
-        issues: issueRows,
-      })
+      renderJson(payload)
       return
     }
 
     if (format === "compact") {
       const lines = [
-        `number\t${cycle.number}`,
-        `name\t${cycleName}`,
-        `starts\t${cycle.startsAt ? formatDate(cycle.startsAt) : "-"}`,
-        `ends\t${cycle.endsAt ? formatDate(cycle.endsAt) : "-"}`,
-        `progress\t${
-          Math.round((cycle.progress ?? 0) * 100)
-        }% (${completedCount}/${totalCount})`,
+        `number\t${payload.number}`,
+        `name\t${payload.name}`,
+        `starts\t${payload.startsAt ? formatDate(payload.startsAt) : "-"}`,
+        `ends\t${payload.endsAt ? formatDate(payload.endsAt) : "-"}`,
+        `progress\t${payload.progressSummary}`,
       ]
       console.log(lines.join("\n"))
       return
     }
 
     render("table", {
-      title: `${cycleName} (#${cycle.number})`,
+      title: `${payload.name} (#${payload.number})`,
       fields: [
         {
           label: "Period",
-          value: `${cycle.startsAt ? formatDate(cycle.startsAt) : "?"} → ${
-            cycle.endsAt ? formatDate(cycle.endsAt) : "?"
+          value: `${payload.startsAt ? formatDate(payload.startsAt) : "?"} → ${
+            payload.endsAt ? formatDate(payload.endsAt) : "?"
           }`,
         },
         {
           label: "Progress",
-          value: `${
-            Math.round((cycle.progress ?? 0) * 100)
-          }% (${completedCount}/${totalCount} issues)`,
+          value: `${payload.progressSummary} issues`,
         },
       ],
     })
 
-    if (issueRows.length > 0) {
+    if (payload.issues.length > 0) {
       console.log("\nIssues:")
-      for (const r of issueRows) {
+      for (const r of payload.issues) {
         console.log(
           `  ${r.identifier}  ${r.state}  ${r.assignee}  ${r.title}    ${
             relativeTime(r.updatedAt)

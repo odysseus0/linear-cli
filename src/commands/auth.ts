@@ -1,7 +1,12 @@
 import { Command } from "@cliffy/command"
 import { Input } from "@cliffy/prompt"
 import { createClient } from "../client.ts"
-import { getAPIKey, removeCredentials, saveCredentials, warnKeyFlag } from "../auth.ts"
+import {
+  getAPIKey,
+  removeCredentials,
+  saveCredentials,
+  warnKeyFlag,
+} from "../auth.ts"
 import { CliError } from "../errors.ts"
 import { getFormat } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
@@ -93,18 +98,18 @@ export const authCommand = new Command()
       .action(async (options) => {
         const format = getFormat(options)
         const apiKey = await getAPIKey()
-        const viewer = await fetchViewerInfo(apiKey)
+        const payload = await fetchViewerInfo(apiKey)
         if (format === "json") {
-          renderJson(viewer)
+          renderJson(payload)
           return
         }
         render(format, {
           headers: ["Name", "Email", "Admin", "Active"],
           rows: [[
-            viewer.name,
-            viewer.email || "-",
-            viewer.admin ? "yes" : "no",
-            viewer.active ? "yes" : "no",
+            payload.name,
+            payload.email || "-",
+            payload.admin ? "yes" : "no",
+            payload.active ? "yes" : "no",
           ]],
         })
       }),

@@ -1,8 +1,6 @@
 import { Command } from "@cliffy/command"
-import { createClient } from "../client.ts"
-import { getAPIKey } from "../auth.ts"
 import { CliError } from "../errors.ts"
-import { getFormat } from "../types.ts"
+import { getCommandContext } from "./_shared/context.ts"
 import { render } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 
@@ -15,34 +13,32 @@ export const userCommand = new Command()
       .description("List workspace users")
       .example("List all users", "linear user list")
       .action(async (options) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const client = createClient(apiKey)
+        const { format, client } = await getCommandContext(options)
         const usersConnection = await client.users()
         const users = usersConnection.nodes
 
+        const payload = users.map((u) => ({
+          name: u.name,
+          displayName: u.displayName,
+          email: u.email,
+          admin: u.admin ?? false,
+          active: u.active ?? true,
+          agent: u.app ?? false,
+        }))
+
         if (format === "json") {
-          renderJson(
-            users.map((u) => ({
-              name: u.name,
-              displayName: u.displayName,
-              email: u.email,
-              admin: u.admin ?? false,
-              active: u.active ?? true,
-              agent: u.app ?? false,
-            })),
-          )
+          renderJson(payload)
           return
         }
 
         render(format, {
           headers: ["Name", "Email", "Admin", "Active", "Agent"],
-          rows: users.map((u) => [
+          rows: payload.map((u) => [
             u.name ?? "Unknown",
             u.email ?? "-",
             u.admin ? "yes" : "no",
             u.active ? "yes" : "no",
-            u.app ? "yes" : "no",
+            u.agent ? "yes" : "no",
           ]),
         })
       }),
@@ -56,9 +52,7 @@ export const userCommand = new Command()
       .example("View yourself", "linear user view me")
       .arguments("<name:string>")
       .action(async (options, name: string) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const client = createClient(apiKey)
+        const { format, client } = await getCommandContext(options)
 
         let user
 
@@ -143,9 +137,7 @@ export const userCommand = new Command()
       .description("Show current authenticated user")
       .example("Who am I", "linear user me")
       .action(async (options) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const client = createClient(apiKey)
+        const { format, client } = await getCommandContext(options)
 
         const user = await client.viewer
 

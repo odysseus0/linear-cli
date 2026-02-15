@@ -1,10 +1,8 @@
 import { Command } from "@cliffy/command"
-import { createClient } from "../client.ts"
-import { getAPIKey } from "../auth.ts"
-import { getFormat } from "../types.ts"
-import { render } from "../output/formatter.ts"
+import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import { relativeTime } from "../time.ts"
+import { getCommandContext } from "./_shared/context.ts"
 
 interface InboxItem {
   type: string
@@ -24,9 +22,7 @@ export const inboxCommand = new Command()
   .option("--all", "Show individual notifications (don't group by issue)")
   .option("--limit <n:number>", "Max notifications to fetch", { default: 50 })
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const notifs = await client.notifications({
       first: options.limit ?? 50,
@@ -85,19 +81,24 @@ export const inboxCommand = new Command()
       rows = [...grouped.values()]
     }
 
+    const payload = rows
+
     if (format === "json") {
-      renderJson(rows)
+      renderJson(payload)
       return
     }
 
-    if (rows.length === 0) {
-      console.log(options.unread ? "Inbox zero." : "No notifications.")
+    if (payload.length === 0) {
+      renderMessage(
+        format,
+        options.unread ? "Inbox zero." : "No notifications.",
+      )
       return
     }
 
     render(format, {
       headers: ["", "Issue", "Title", "Summary", "When"],
-      rows: rows.map((r) => {
+      rows: payload.map((r) => {
         const countSuffix = r.count > 1 ? ` (+${r.count - 1})` : ""
         return [
           r.read ? " " : "●",
