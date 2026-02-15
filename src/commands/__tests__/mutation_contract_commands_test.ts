@@ -2,7 +2,7 @@ import { assertStringIncludes } from "@std/assert"
 
 Deno.test("issue porcelain mutations define standardized action ids", async () => {
   const issueSource = await Deno.readTextFile(
-    new URL("../issue.ts", import.meta.url),
+    new URL("../issue/mutate.ts", import.meta.url),
   )
 
   for (const action of ["close", "reopen", "start", "assign"]) {
@@ -11,9 +11,13 @@ Deno.test("issue porcelain mutations define standardized action ids", async () =
 })
 
 Deno.test("project porcelain mutations define standardized action ids", async () => {
-  const projectSource = await Deno.readTextFile(
-    new URL("../project.ts", import.meta.url),
+  const projectMutateSource = await Deno.readTextFile(
+    new URL("../project/mutate.ts", import.meta.url),
   )
+  const projectStatusSource = await Deno.readTextFile(
+    new URL("../project/status.ts", import.meta.url),
+  )
+  const projectSource = `${projectMutateSource}\n${projectStatusSource}`
 
   for (
     const action of [
