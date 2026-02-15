@@ -926,7 +926,7 @@ const closeCommand = new Command()
   .arguments("<ids...:string>")
   .action(async (options, ...ids: [string, ...Array<string>]) => {
     const { format, client } = await getCommandContext(options)
-    const teamKey = (options as { team?: string }).team
+    const teamKey = (options as unknown as { team?: string }).team
 
     const completedStateByTeam = new Map<string, { id: string; name: string }>()
     const closedIssues: Array<{
@@ -998,7 +998,7 @@ const reopenCommand = new Command()
   .arguments("<ids...:string>")
   .action(async (options, ...ids: [string, ...Array<string>]) => {
     const { format, client } = await getCommandContext(options)
-    const teamKey = (options as { team?: string }).team
+    const teamKey = (options as unknown as { team?: string }).team
 
     const unstartedStateByTeam = new Map<string, { id: string; name: string }>()
     const reopenedIssues: Array<{
@@ -1073,7 +1073,7 @@ const startCommand = new Command()
   .arguments("<ids...:string>")
   .action(async (options, ...ids: [string, ...Array<string>]) => {
     const { format, client } = await getCommandContext(options)
-    const teamKey = (options as { team?: string }).team
+    const teamKey = (options as unknown as { team?: string }).team
 
     const startedStateByTeam = new Map<string, { id: string; name: string }>()
     const startedIssues: Array<{

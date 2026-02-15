@@ -5,7 +5,6 @@ import {
   getAPIKey,
   removeCredentials,
   saveCredentials,
-  warnKeyFlag,
 } from "../auth.ts"
 import { CliError } from "../errors.ts"
 import { getFormat } from "../types.ts"
@@ -50,7 +49,6 @@ export const authCommand = new Command()
       .description("Authenticate with Linear")
       .option("--key <key:string>", "API key")
       .action(async (options) => {
-        if (options.key) warnKeyFlag()
         const format = getFormat(options)
         const envKey = Deno.env.get("LINEAR_API_KEY")
         const apiKey = options.key ?? envKey ??
