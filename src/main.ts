@@ -116,7 +116,7 @@ const app = new Command()
     new Command()
       .description("Show help")
       .arguments("[command:string]")
-      .action(async (_options, command?: string) => {
+      .action((_options, command?: string) => {
         if (command) {
           // Try to show help for a specific subcommand
           const sub = app.getCommand(command, false)

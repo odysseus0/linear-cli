@@ -1,9 +1,6 @@
 import { Command } from "@cliffy/command"
-import { ProjectUpdateHealthType } from "@linear/sdk"
-import { createClient } from "../client.ts"
+import { type LinearClient, ProjectUpdateHealthType } from "@linear/sdk"
 import { CliError } from "../errors.ts"
-import { getAPIKey } from "../auth.ts"
-import { getFormat } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import {
@@ -12,8 +9,13 @@ import {
   resolveProjectByName,
   resolveUser,
 } from "../resolve.ts"
-import type { GlobalOptions } from "../types.ts"
 import { formatDate, relativeTime } from "../time.ts"
+import { confirmDangerousAction } from "./_shared/confirm.ts"
+import { getCommandContext } from "./_shared/context.ts"
+import {
+  buildMutationResult,
+  renderMutationOutput,
+} from "./_shared/mutation_output.ts"
 
 const HEALTH_MAP: Record<string, ProjectUpdateHealthType> = {
   ontrack: ProjectUpdateHealthType.OnTrack,
@@ -21,46 +23,12 @@ const HEALTH_MAP: Record<string, ProjectUpdateHealthType> = {
   offtrack: ProjectUpdateHealthType.OffTrack,
 }
 
-async function buildProjectJson(
-  // deno-lint-ignore no-explicit-any
-  project: any,
-) {
-  const lead = await project.lead
-  const teams = await project.teams()
-  const issues = await project.issues({ first: 10 })
-
-  const issueRows = await Promise.all(
-    issues.nodes.map(async (issue) => {
-      const state = await issue.state
-      const assignee = await issue.assignee
-      return {
-        identifier: issue.identifier,
-        state: state?.name ?? "-",
-        assignee: assignee?.name ?? "-",
-        title: issue.title,
-        updatedAt: issue.updatedAt,
-      }
-    }),
-  )
-
-  return {
-    name: project.name,
-    description: project.description ?? null,
-    state: project.state ?? "-",
-    progress: `${Math.round((project.progress ?? 0) * 100)}%`,
-    lead: lead?.name ?? null,
-    targetDate: project.targetDate ?? null,
-    teams: teams.nodes.map((t) => t.key),
-    url: project.url,
-    createdAt: project.createdAt,
-    issues: issueRows,
-  }
-}
-
 const listCommand = new Command()
   .description("List projects")
   .example("List active projects", "linear project list")
   .example("Include completed", "linear project list --include-completed")
+  .example("Filter by lead", "linear project list --lead Alice")
+  .example("Sort by progress", "linear project list --sort progress")
   .option(
     "-s, --state <state:string>",
     "Filter: planned, started, paused, completed, canceled",
@@ -69,10 +37,16 @@ const listCommand = new Command()
     },
   )
   .option("--include-completed", "Include completed/canceled")
+  .option("--lead <name:string>", "Filter by lead name (substring match)")
+  .option(
+    "--sort <field:string>",
+    "Sort: name, created, updated, target-date, progress",
+    {
+      default: "name",
+    },
+  )
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const projects = await client.projects()
     let items = projects.nodes
@@ -89,28 +63,72 @@ const listCommand = new Command()
       )
     }
 
-    const rows = await Promise.all(
+    let rows = await Promise.all(
       items.map(async (p) => {
         const lead = await p.lead
         return {
           name: p.name,
           state: p.state ?? "-",
+          progressNum: p.progress ?? 0,
           progress: `${Math.round((p.progress ?? 0) * 100)}%`,
           lead: lead?.name ?? "-",
           targetDate: p.targetDate ?? "-",
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
           url: p.url,
         }
       }),
     )
 
+    // Filter by lead (substring, case-insensitive)
+    if (options.lead) {
+      const needle = options.lead.toLowerCase()
+      rows = rows.filter((r) => r.lead.toLowerCase().includes(needle))
+    }
+
+    // Sort
+    const sortField = options.sort ?? "name"
+    rows.sort((a, b) => {
+      switch (sortField) {
+        case "name":
+          return a.name.localeCompare(b.name)
+        case "created":
+          return new Date(b.createdAt).getTime() -
+            new Date(a.createdAt).getTime()
+        case "updated":
+          return new Date(b.updatedAt).getTime() -
+            new Date(a.updatedAt).getTime()
+        case "target-date": {
+          // Nulls ("-") sort last
+          if (a.targetDate === "-" && b.targetDate === "-") return 0
+          if (a.targetDate === "-") return 1
+          if (b.targetDate === "-") return -1
+          return a.targetDate.localeCompare(b.targetDate)
+        }
+        case "progress":
+          return b.progressNum - a.progressNum
+        default:
+          return 0
+      }
+    })
+
+    const payload = rows.map((r) => ({
+      name: r.name,
+      state: r.state,
+      progress: r.progress,
+      lead: r.lead,
+      targetDate: r.targetDate,
+      url: r.url,
+    }))
+
     if (format === "json") {
-      renderJson(rows)
+      renderJson(payload)
       return
     }
 
     render(format, {
       headers: ["Name", "State", "Progress", "Lead", "Target"],
-      rows: rows.map((r) => [
+      rows: payload.map((r) => [
         r.name,
         r.state,
         r.progress,
@@ -126,9 +144,7 @@ const viewCommand = new Command()
   .example("View a project", "linear project view 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const project = await resolveProjectByName(client, name)
 
@@ -154,56 +170,69 @@ const viewCommand = new Command()
       (project.progress ?? 0) * (issues.nodes.length || 1),
     )
     const totalCount = issues.nodes.length
+    const payload = {
+      name: project.name,
+      description: project.description ?? null,
+      state: project.state ?? "-",
+      progressPercent: Math.round((project.progress ?? 0) * 100),
+      progressSummary: `${
+        Math.round((project.progress ?? 0) * 100)
+      }% (${completedCount}/${totalCount})`,
+      lead: lead?.name ?? null,
+      targetDate: project.targetDate ?? null,
+      teams: teams.nodes.map((t) => t.key),
+      url: project.url,
+      createdAt: project.createdAt,
+      issues: issueRows,
+      issuePreviewCount: issueRows.length,
+      issuePreviewLimit: 10,
+    }
 
     if (format === "json") {
-      renderJson(await buildProjectJson(project))
+      renderJson(payload)
       return
     }
 
     if (format === "compact") {
       const lines = [
-        `name\t${project.name}`,
-        `description\t${project.description ?? "-"}`,
-        `state\t${project.state ?? "-"}`,
-        `progress\t${
-          Math.round((project.progress ?? 0) * 100)
-        }% (${completedCount}/${totalCount})`,
-        `lead\t${lead?.name ?? "-"}`,
-        `target\t${project.targetDate ?? "-"}`,
-        `teams\t${teams.nodes.map((t) => t.key).join(", ")}`,
-        `url\t${project.url}`,
+        `name\t${payload.name}`,
+        `description\t${payload.description ?? "-"}`,
+        `state\t${payload.state}`,
+        `progress\t${payload.progressSummary}`,
+        `lead\t${payload.lead ?? "-"}`,
+        `target\t${payload.targetDate ?? "-"}`,
+        `teams\t${payload.teams.join(", ")}`,
+        `url\t${payload.url}`,
       ]
       console.log(lines.join("\n"))
       return
     }
 
     render("table", {
-      title: project.name,
+      title: payload.name,
       fields: [
-        { label: "Description", value: project.description ?? "-" },
-        { label: "State", value: project.state ?? "-" },
+        { label: "Description", value: payload.description ?? "-" },
+        { label: "State", value: payload.state },
         {
           label: "Progress",
-          value: `${
-            Math.round((project.progress ?? 0) * 100)
-          }% (${completedCount}/${totalCount} issues)`,
+          value: `${payload.progressSummary} issues`,
         },
-        { label: "Lead", value: lead?.name ?? "-" },
-        { label: "Target", value: project.targetDate ?? "-" },
-        { label: "Teams", value: teams.nodes.map((t) => t.key).join(", ") },
+        { label: "Lead", value: payload.lead ?? "-" },
+        { label: "Target", value: payload.targetDate ?? "-" },
+        { label: "Teams", value: payload.teams.join(", ") },
         {
           label: "Created",
-          value: `${formatDate(project.createdAt)} (${
-            relativeTime(project.createdAt)
+          value: `${formatDate(payload.createdAt)} (${
+            relativeTime(payload.createdAt)
           })`,
         },
-        { label: "URL", value: project.url },
+        { label: "URL", value: payload.url },
       ],
     })
 
-    if (issueRows.length > 0) {
+    if (payload.issues.length > 0) {
       console.log("\nRecent Issues:")
-      for (const r of issueRows) {
+      for (const r of payload.issues) {
         console.log(
           `  ${r.identifier}  ${r.state}  ${r.assignee}  ${r.title}    ${
             relativeTime(r.updatedAt)
@@ -224,9 +253,7 @@ const createCommand = new Command()
   .option("--lead <name:string>", "Project lead")
   .option("--target-date <date:string>", "Target date (YYYY-MM-DD)")
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const description = options.description ?? await readStdin()
     const leadId = options.lead
@@ -234,7 +261,7 @@ const createCommand = new Command()
       : undefined
 
     let teamIds: string[] = []
-    const teamKey = (options as { team?: string }).team
+    const teamKey = (options as unknown as { team?: string }).team
     if (teamKey) {
       const teams = await client.teams()
       const team = teams.nodes.find(
@@ -253,18 +280,20 @@ const createCommand = new Command()
     const project = await payload.project
 
     if (!project) {
-      throw new Error("failed to create project")
+      throw new CliError("failed to create project", 1)
     }
 
-    if (format === "json") {
-      renderJson({ name: project.name, url: project.url })
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `Created project: ${project.name}\n${project.url}`,
-    )
+      result: buildMutationResult({
+        id: project.id,
+        entity: "project",
+        action: "create",
+        status: "success",
+        url: project.url,
+        metadata: { name: project.name },
+      }),
+    })
     if (format === "table") {
       console.error(
         `  add issues: linear project add-issue '${project.name}' <issue-id>`,
@@ -300,9 +329,7 @@ const updateCommand = new Command()
       Deno.exit(4)
     }
 
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const project = await resolveProjectByName(client, projectName)
 
@@ -322,19 +349,28 @@ const updateCommand = new Command()
     const updated = await payload.project
 
     if (!updated) {
-      throw new Error("failed to update project")
+      throw new CliError("failed to update project", 1)
     }
 
-    if (format === "json") {
-      renderJson(await buildProjectJson(updated))
-      return
-    }
+    const lead = await updated.lead
 
-    renderMessage(
+    renderMutationOutput({
       format,
-      `${updated.name} updated
-${updated.url}`,
-    )
+      result: buildMutationResult({
+        id: updated.id,
+        entity: "project",
+        action: "update",
+        status: "success",
+        url: updated.url,
+        metadata: {
+          name: updated.name,
+          state: updated.state ?? "-",
+          progress: `${Math.round((updated.progress ?? 0) * 100)}%`,
+          lead: lead?.name ?? null,
+          targetDate: updated.targetDate ?? null,
+        },
+      }),
+    })
   })
 
 // --- Milestone subcommands ---
@@ -344,14 +380,12 @@ const milestoneListCommand = new Command()
   .example("List milestones", "linear project milestone list 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const project = await resolveProjectByName(client, name)
     const milestones = await project.projectMilestones()
 
-    const rows = milestones.nodes.map((m) => ({
+    const payload = milestones.nodes.map((m) => ({
       name: m.name,
       status: String(m.status ?? "-"),
       targetDate: m.targetDate ?? "-",
@@ -360,14 +394,14 @@ const milestoneListCommand = new Command()
     }))
 
     if (format === "json") {
-      renderJson(rows)
+      renderJson(payload)
       return
     }
 
     if (format === "table") {
       render("table", {
         headers: ["Name", "Status", "Target", "Progress", "Description"],
-        rows: rows.map((r) => [
+        rows: payload.map((r) => [
           r.name,
           r.status,
           r.targetDate,
@@ -380,7 +414,7 @@ const milestoneListCommand = new Command()
     } else {
       render("compact", {
         headers: ["Name", "Status", "Target", "Progress"],
-        rows: rows.map((r) => [
+        rows: payload.map((r) => [
           r.name,
           r.status,
           r.targetDate,
@@ -403,9 +437,7 @@ const milestoneCreateCommand = new Command()
   .option("--target-date <date:string>", "Target date (YYYY-MM-DD)")
   .option("--date <date:string>", "Alias for --target-date", { hidden: true })
   .action(async (options, milestoneName: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const project = await resolveProjectByName(client, options.project)
 
@@ -421,24 +453,23 @@ const milestoneCreateCommand = new Command()
     const milestone = await payload.projectMilestone
 
     if (!milestone) {
-      throw new Error("failed to create milestone")
+      throw new CliError("failed to create milestone", 1)
     }
 
-    if (format === "json") {
-      renderJson({
-        name: milestone.name,
-        targetDate: milestone.targetDate ?? null,
-        description: milestone.description ?? null,
-      })
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `Created milestone: ${milestone.name}${
-        milestone.targetDate ? ` (target: ${milestone.targetDate})` : ""
-      }`,
-    )
+      result: buildMutationResult({
+        id: milestone.id,
+        entity: "projectMilestone",
+        action: "create",
+        status: "success",
+        metadata: {
+          name: milestone.name,
+          targetDate: milestone.targetDate ?? null,
+          description: milestone.description ?? null,
+        },
+      }),
+    })
   })
 
 const milestoneCommand = new Command()
@@ -461,9 +492,7 @@ const postCommand = new Command()
     "Health: onTrack, atRisk, offTrack",
   )
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const project = await resolveProjectByName(client, name)
 
@@ -489,24 +518,24 @@ const postCommand = new Command()
     const update = await payload.projectUpdate
 
     if (!update) {
-      throw new Error("failed to create project update")
+      throw new CliError("failed to create project update", 1)
     }
 
-    if (format === "json") {
-      renderJson({
-        url: update.url,
-        health: update.health ?? null,
-        createdAt: update.createdAt,
-      })
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `Posted update for ${project.name}${
-        update.health ? ` [${update.health}]` : ""
-      }\n${update.url}`,
-    )
+      result: buildMutationResult({
+        id: update.id,
+        entity: "projectUpdate",
+        action: "create",
+        status: "success",
+        url: update.url,
+        metadata: {
+          project: project.name,
+          health: update.health ?? null,
+          createdAt: update.createdAt,
+        },
+      }),
+    })
   })
 
 // --- Labels command ---
@@ -516,14 +545,12 @@ const labelsCommand = new Command()
   .example("List project labels", "linear project labels 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const project = await resolveProjectByName(client, name)
     const labels = await project.labels()
 
-    const rows = labels.nodes.map((l) => ({
+    const payload = labels.nodes.map((l) => ({
       name: l.name,
       color: l.color,
       description: l.description ?? "-",
@@ -531,14 +558,14 @@ const labelsCommand = new Command()
     }))
 
     if (format === "json") {
-      renderJson(rows)
+      renderJson(payload)
       return
     }
 
     if (format === "table") {
       render("table", {
         headers: ["Name", "Color", "Group", "Description"],
-        rows: rows.map((r) => [
+        rows: payload.map((r) => [
           r.name,
           r.color,
           r.group,
@@ -550,16 +577,53 @@ const labelsCommand = new Command()
     } else {
       render("compact", {
         headers: ["Name", "Color", "Description"],
-        rows: rows.map((r) => [r.name, r.color, r.description]),
+        rows: payload.map((r) => [r.name, r.color, r.description]),
       })
     }
+  })
+
+const deleteCommand = new Command()
+  .description("Delete project")
+  .example("Delete a project", "linear project delete 'My Project'")
+  .example(
+    "Delete without confirmation",
+    "linear project delete 'My Project' --yes",
+  )
+  .arguments("<name:string>")
+  .option("-y, --yes", "Skip confirmation prompt")
+  .action(async (options, name: string) => {
+    const { format, client, noInput } = await getCommandContext(options)
+
+    const project = await resolveProjectByName(client, name)
+
+    const confirmed = await confirmDangerousAction({
+      prompt: `Delete project "${project.name}"?`,
+      skipConfirm: Boolean((options as { yes?: boolean }).yes) || noInput,
+    })
+    if (!confirmed) {
+      renderMessage(format, "Canceled")
+      return
+    }
+
+    await client.deleteProject(project.id)
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: project.id,
+        entity: "project",
+        action: "delete",
+        status: "success",
+        url: project.url,
+        metadata: { name: project.name },
+      }),
+    })
   })
 
 // --- Porcelain: state transitions ---
 
 /** Find project status ID by type (started, paused, completed, canceled). */
 async function resolveProjectStatusId(
-  client: ReturnType<typeof createClient>,
+  client: LinearClient,
   statusType: string,
 ): Promise<string> {
   const statuses = await client.projectStatuses()
@@ -581,24 +645,30 @@ const startCommand = new Command()
   .example("Start a project", "linear project start 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const project = await resolveProjectByName(client, name)
+    const { format, client } = await getCommandContext(options)
+    const project = await resolveProjectByName(
+      client,
+      name,
+      (p) => p.state?.toLowerCase() !== "started",
+    )
     const statusId = await resolveProjectStatusId(client, "started")
     await client.updateProject(project.id, { statusId })
-    const updated = await client.project(project.id)
-
-    if (format === "json") {
-      renderJson(await buildProjectJson(updated))
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `${updated.name} started
-${updated.url}`,
-    )
+      result: buildMutationResult({
+        id: project.id,
+        entity: "project",
+        action: "start",
+        status: "success",
+        url: project.url,
+        metadata: { name: project.name },
+      }),
+    })
+    if (format === "table") {
+      console.error(
+        `  post update: linear project post '${name}' --body '<text>'`,
+      )
+    }
   })
 
 const pauseCommand = new Command()
@@ -606,24 +676,25 @@ const pauseCommand = new Command()
   .example("Pause a project", "linear project pause 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const project = await resolveProjectByName(client, name)
+    const { format, client } = await getCommandContext(options)
+    const project = await resolveProjectByName(
+      client,
+      name,
+      (p) => p.state?.toLowerCase() !== "paused",
+    )
     const statusId = await resolveProjectStatusId(client, "paused")
     await client.updateProject(project.id, { statusId })
-    const updated = await client.project(project.id)
-
-    if (format === "json") {
-      renderJson(await buildProjectJson(updated))
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `${updated.name} paused
-${updated.url}`,
-    )
+      result: buildMutationResult({
+        id: project.id,
+        entity: "project",
+        action: "pause",
+        status: "success",
+        url: project.url,
+        metadata: { name: project.name },
+      }),
+    })
   })
 
 const completeCommand = new Command()
@@ -631,24 +702,25 @@ const completeCommand = new Command()
   .example("Complete a project", "linear project complete 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const project = await resolveProjectByName(client, name)
+    const { format, client } = await getCommandContext(options)
+    const project = await resolveProjectByName(
+      client,
+      name,
+      (p) => p.state?.toLowerCase() !== "completed",
+    )
     const statusId = await resolveProjectStatusId(client, "completed")
     await client.updateProject(project.id, { statusId })
-    const updated = await client.project(project.id)
-
-    if (format === "json") {
-      renderJson(await buildProjectJson(updated))
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `${updated.name} completed
-${updated.url}`,
-    )
+      result: buildMutationResult({
+        id: project.id,
+        entity: "project",
+        action: "complete",
+        status: "success",
+        url: project.url,
+        metadata: { name: project.name },
+      }),
+    })
   })
 
 const cancelCommand = new Command()
@@ -656,24 +728,25 @@ const cancelCommand = new Command()
   .example("Cancel a project", "linear project cancel 'My Project'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const project = await resolveProjectByName(client, name)
+    const { format, client } = await getCommandContext(options)
+    const project = await resolveProjectByName(
+      client,
+      name,
+      (p) => p.state?.toLowerCase() !== "canceled",
+    )
     const statusId = await resolveProjectStatusId(client, "canceled")
     await client.updateProject(project.id, { statusId })
-    const updated = await client.project(project.id)
-
-    if (format === "json") {
-      renderJson(await buildProjectJson(updated))
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `${updated.name} canceled
-${updated.url}`,
-    )
+      result: buildMutationResult({
+        id: project.id,
+        entity: "project",
+        action: "cancel",
+        status: "success",
+        url: project.url,
+        metadata: { name: project.name },
+      }),
+    })
   })
 
 // --- Porcelain: cross-entity actions ---
@@ -686,32 +759,31 @@ const addIssueCommand = new Command()
   )
   .arguments("<project:string> <issue:string>")
   .action(async (options, projectName: string, issueId: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const project = await resolveProjectByName(client, projectName)
     const issue = await resolveIssue(client, issueId, teamKey)
 
     await client.updateIssue(issue.id, { projectId: project.id })
-
-    if (format === "json") {
-      const updatedProject = await client.project(project.id)
-      renderJson(await buildProjectJson(updatedProject))
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `${issue.identifier} added to ${project.name}
-${project.url}`,
-    )
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "moveToProject",
+        status: "success",
+        url: issue.url,
+        metadata: { project: project.name },
+      }),
+    })
   })
 
 export const projectCommand = new Command()
   .description("Manage projects")
   .alias("projects")
+  .example("List projects", "linear project list")
+  .example("View project", "linear project view 'My Project'")
   .command("list", listCommand)
   .command("view", viewCommand)
   .command("create", createCommand)
@@ -723,4 +795,5 @@ export const projectCommand = new Command()
   .command("pause", pauseCommand)
   .command("complete", completeCommand)
   .command("cancel", cancelCommand)
+  .command("delete", deleteCommand)
   .command("add-issue", addIssueCommand)

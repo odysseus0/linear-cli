@@ -1,16 +1,11 @@
 import { Command } from "@cliffy/command"
 import { type LinearClient, PaginationOrderBy } from "@linear/sdk"
-import { createClient } from "../client.ts"
 // Exit codes: 0 success, 1 runtime error, 2 auth error, 3 not found, 4 validation/usage
 import { CliError } from "../errors.ts"
-import { getAPIKey } from "../auth.ts"
-import { getFormat } from "../types.ts"
-import type { GlobalOptions } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import {
   readStdin,
-  requireTeam,
   resolveIssue,
   resolveLabel,
   resolvePriority,
@@ -21,6 +16,12 @@ import {
 } from "../resolve.ts"
 import { compactTime, formatDate, relativeTime } from "../time.ts"
 import { renderMarkdown } from "../output/markdown.ts"
+import { confirmDangerousAction } from "./_shared/confirm.ts"
+import { getCommandContext } from "./_shared/context.ts"
+import {
+  buildMutationResult,
+  renderMutationOutput,
+} from "./_shared/mutation_output.ts"
 
 function priorityIndicator(priority: number): string {
   switch (priority) {
@@ -50,86 +51,15 @@ function priorityName(priority: number): string {
   }
 }
 
-async function buildIssueJson(
-  // deno-lint-ignore no-explicit-any
-  client: any,
-  // deno-lint-ignore no-explicit-any
-  issue: any,
-) {
-  const state = await issue.state
-  const assignee = await issue.assignee
-  const delegate = await issue.delegate
-  const labelsConn = await issue.labels()
-  const labels = labelsConn.nodes
-  const project = await issue.project
-  const cycle = await issue.cycle
-  const commentsConn = await issue.comments()
-  const comments = commentsConn.nodes
-  const branchName = await issue.branchName
-
-  const allSessions = await client.agentSessions()
-  const sessions = []
-  for (const session of allSessions.nodes) {
-    const sessionIssue = await session.issue
-    if (sessionIssue?.id === issue.id) {
-      const appUser = await session.appUser
-      const activities = await session.activities()
-      const responseActivity = activities.nodes.find(
-        (a) =>
-          // deno-lint-ignore no-explicit-any
-          (a.content as any)?.__typename === "AgentActivityResponseContent",
-      )
-      sessions.push({
-        agent: appUser?.name ?? "Unknown",
-        status: session.status,
-        createdAt: session.createdAt,
-        // deno-lint-ignore no-explicit-any
-        summary: (responseActivity?.content as any)?.body ?? null,
-        externalUrl: session.externalLinks?.[0]?.url ??
-          // deno-lint-ignore no-explicit-any
-          (session.externalUrls as any)?.[0]?.url ?? null,
-        activities: null,
-      })
-    }
-  }
-
-  const commentData = await Promise.all(
-    comments.map(async (c) => {
-      const user = await c.user
-      return {
-        author: user?.name ?? "Unknown",
-        body: c.body,
-        createdAt: c.createdAt,
-      }
-    }),
-  )
-
-  return {
-    id: issue.identifier,
-    title: issue.title,
-    state: state?.name ?? "-",
-    priority: priorityName(issue.priority),
-    assignee: assignee?.name ?? null,
-    delegate: delegate?.name ?? null,
-    labels: labels.map((l) => l.name),
-    project: project?.name ?? null,
-    cycle: cycle?.name ?? null,
-    createdAt: issue.createdAt,
-    updatedAt: issue.updatedAt,
-    url: issue.url,
-    branchName: branchName ?? null,
-    description: issue.description ?? null,
-    comments: commentData,
-    agentSessions: sessions,
-  }
-}
-
 const DEFAULT_ACTIVE_STATES = ["triage", "backlog", "unstarted", "started"]
 
 const listCommand = new Command()
   .description("List issues")
   .example("List team issues", "linear issue list --team POL")
   .example("List my issues", "linear issue list --team POL --assignee me")
+  .example("Urgent issues", "linear issue list --team POL --priority urgent")
+  .example("Current cycle", "linear issue list --team POL --cycle current")
+  .example("Overdue issues", "linear issue list --team POL --overdue")
   .option("-s, --state <state:string>", "State type filter", {
     collect: true,
   })
@@ -141,6 +71,16 @@ const listCommand = new Command()
   .option("-U, --unassigned", "Show only unassigned")
   .option("-l, --label <name:string>", "Filter by label", { collect: true })
   .option("-p, --project <name:string>", "Filter by project")
+  .option(
+    "--priority <priority:string>",
+    "Filter by priority: urgent, high, medium, low, none (or 0-4)",
+  )
+  .option(
+    "--cycle <cycle:string>",
+    "Filter by cycle: current, next, or cycle number",
+  )
+  .option("--due <date:string>", "Issues due on or before date (YYYY-MM-DD)")
+  .option("--overdue", "Show only overdue issues (past due date)")
   .option("--sort <field:string>", "Sort: updated, created, priority", {
     default: "updatedAt",
   })
@@ -150,10 +90,9 @@ const listCommand = new Command()
     hidden: true,
   })
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = requireTeam(options)
+    const { format, client, teamKey } = await getCommandContext(options, {
+      requireTeam: true,
+    })
 
     // --- Resolve all filter values ---
 
@@ -193,17 +132,25 @@ const listCommand = new Command()
         (t: { key: string }) => t.key.toLowerCase() === teamKey.toLowerCase(),
       )
       if (!team) {
-        throw new CliError(`team not found: "${teamKey}"`, 3, "check team key with: linear team list")
+        throw new CliError(
+          `team not found: "${teamKey}"`,
+          3,
+          "check team key with: linear team list",
+        )
       }
       const cycles = await team.cycles()
       const now = new Date()
 
       if (options.cycle === "current") {
-        const current = cycles.nodes.find((c: { startsAt: Date; endsAt: Date }) =>
-          new Date(c.startsAt) <= now && now <= new Date(c.endsAt)
-        )
+        const current = cycles.nodes.find((
+          c: { startsAt: Date; endsAt: Date },
+        ) => new Date(c.startsAt) <= now && now <= new Date(c.endsAt))
         if (!current) {
-          throw new CliError("no active cycle found", 3, "list cycles with: linear cycle list --team " + teamKey)
+          throw new CliError(
+            "no active cycle found",
+            3,
+            "list cycles with: linear cycle list --team " + teamKey,
+          )
         }
         cycleId = current.id
       } else if (options.cycle === "next") {
@@ -213,7 +160,11 @@ const listCommand = new Command()
             new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()
           )
         if (future.length === 0) {
-          throw new CliError("no upcoming cycle found", 3, "list cycles with: linear cycle list --team " + teamKey)
+          throw new CliError(
+            "no upcoming cycle found",
+            3,
+            "list cycles with: linear cycle list --team " + teamKey,
+          )
         }
         cycleId = future[0].id
       } else {
@@ -225,9 +176,15 @@ const listCommand = new Command()
             "--cycle current, --cycle next, or --cycle <number>",
           )
         }
-        const match = cycles.nodes.find((c: { number: number }) => c.number === num)
+        const match = cycles.nodes.find((c: { number: number }) =>
+          c.number === num
+        )
         if (!match) {
-          throw new CliError(`cycle #${num} not found`, 3, "list cycles with: linear cycle list --team " + teamKey)
+          throw new CliError(
+            `cycle #${num} not found`,
+            3,
+            "list cycles with: linear cycle list --team " + teamKey,
+          )
         }
         cycleId = match.id
       }
@@ -252,10 +209,12 @@ const listCommand = new Command()
       ...(options.unassigned && !assigneeName && { assignee: { null: true } }),
       ...(labelIds && { labels: { id: { in: labelIds } } }),
       ...(projectId && { project: { id: { eq: projectId } } }),
-      ...(options.priority && { priority: { eq: resolvePriority(options.priority) } }),
+      ...(options.priority &&
+        { priority: { eq: resolvePriority(options.priority) } }),
       ...(cycleId && { cycle: { id: { eq: cycleId } } }),
       ...(dueDate && { dueDate }),
     }
+
     // Normalize human-friendly sort values
     const sortMap: Record<string, string> = {
       updated: "updatedAt",
@@ -268,7 +227,7 @@ const listCommand = new Command()
       ? PaginationOrderBy.CreatedAt
       : PaginationOrderBy.UpdatedAt
 
-    // V16: progress indication for slow list fetch
+    // Progress indication for slow list fetch
     if (Deno.stderr.isTerminal()) {
       Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
     }
@@ -299,7 +258,7 @@ const listCommand = new Command()
     )
 
     // Client-side priority sort if requested
-    if (options.sort === "priority") {
+    if (sortField === "priority") {
       rows.sort((a, b) => (a.priority ?? 5) - (b.priority ?? 5))
     }
 
@@ -372,10 +331,8 @@ const viewCommand = new Command()
   .arguments("<id:string>")
   .option("-v, --verbose", "Show full agent activity log")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const state = await issue.state
@@ -400,14 +357,12 @@ const viewCommand = new Command()
         const activities = await session.activities()
         // Find the last response activity (the summary/result)
         const responseActivity = activities.nodes.find(
-          (a) =>
-            a.content.__typename === "AgentActivityResponseContent",
+          (a) => a.content.__typename === "AgentActivityResponseContent",
         )
-        const summary =
-          responseActivity?.content.__typename ===
-              "AgentActivityResponseContent"
-            ? responseActivity.content.body
-            : null
+        const summary = responseActivity?.content.__typename ===
+            "AgentActivityResponseContent"
+          ? responseActivity.content.body
+          : null
         sessions.push({
           agent: appUser?.name ?? "Unknown",
           status: session.status,
@@ -415,7 +370,9 @@ const viewCommand = new Command()
           summary,
           // externalUrls is typed as Record<string, unknown> in SDK but is actually { url: string }[]
           externalUrl: session.externalLinks?.[0]?.url ??
-            (session.externalUrls as unknown as { url?: string }[] | undefined)?.[0]?.url ?? null,
+            (session.externalUrls as unknown as { url?: string }[] | undefined)
+              ?.[0]?.url ??
+            null,
           activities: (options as { verbose?: boolean }).verbose
             ? activities.nodes.map((a) => ({
               type: a.content.__typename
@@ -431,57 +388,60 @@ const viewCommand = new Command()
       }
     }
 
+    const commentData = await Promise.all(
+      comments.map(async (c) => {
+        const user = await c.user
+        return {
+          author: user?.name ?? "Unknown",
+          body: c.body,
+          createdAt: c.createdAt,
+        }
+      }),
+    )
+
+    const payload = {
+      id: issue.identifier,
+      title: issue.title,
+      state: state?.name ?? "-",
+      priority: priorityName(issue.priority),
+      assignee: assignee?.name ?? null,
+      delegate: delegate?.name ?? null,
+      labels: labels.map((l) => l.name),
+      project: project?.name ?? null,
+      cycle: cycle?.name ?? null,
+      createdAt: issue.createdAt,
+      updatedAt: issue.updatedAt,
+      url: issue.url,
+      branchName: branchName ?? null,
+      description: issue.description ?? null,
+      comments: commentData,
+      agentSessions: sessions,
+    }
+
     if (format === "json") {
-      const commentData = await Promise.all(
-        comments.map(async (c) => {
-          const user = await c.user
-          return {
-            author: user?.name ?? "Unknown",
-            body: c.body,
-            createdAt: c.createdAt,
-          }
-        }),
-      )
-      renderJson({
-        id: issue.identifier,
-        title: issue.title,
-        state: state?.name ?? "-",
-        priority: priorityName(issue.priority),
-        assignee: assignee?.name ?? null,
-        delegate: delegate?.name ?? null,
-        labels: labels.map((l) => l.name),
-        project: project?.name ?? null,
-        cycle: cycle?.name ?? null,
-        createdAt: issue.createdAt,
-        updatedAt: issue.updatedAt,
-        url: issue.url,
-        branchName: branchName ?? null,
-        description: issue.description ?? null,
-        comments: commentData,
-        agentSessions: sessions,
-      })
+      renderJson(payload)
       return
     }
 
     if (format === "compact") {
       const lines = [
-        `id\t${issue.identifier}`,
-        `title\t${issue.title}`,
-        `state\t${state?.name ?? "-"}`,
-        `priority\t${priorityName(issue.priority)}`,
-        `assignee\t${assignee?.name ?? "-"}`,
-        `delegate\t${delegate?.name ?? "-"}`,
-        `labels\t${labels.length ? labels.map((l) => l.name).join(", ") : "-"}`,
-        `project\t${project?.name ?? "-"}`,
-        `cycle\t${cycle?.name ?? "-"}`,
-        `created\t${new Date(issue.createdAt).toISOString()}`,
-        `updated\t${new Date(issue.updatedAt).toISOString()}`,
-        `url\t${issue.url}`,
-        `branch\t${branchName ?? "-"}`,
-        `description\t${issue.description ?? "-"}`,
+        `id\t${payload.id}`,
+        `title\t${payload.title}`,
+        `state\t${payload.state}`,
+        `priority\t${payload.priority}`,
+        `assignee\t${payload.assignee ?? "-"}`,
+        `delegate\t${payload.delegate ?? "-"}`,
+        `labels\t${payload.labels.length ? payload.labels.join(", ") : "-"}`,
+        `project\t${payload.project ?? "-"}`,
+        `cycle\t${payload.cycle ?? "-"}`,
+        `created\t${new Date(payload.createdAt).toISOString()}`,
+        `updated\t${new Date(payload.updatedAt).toISOString()}`,
+        `url\t${payload.url}`,
+        `branch\t${payload.branchName ?? "-"}`,
+        `description\t${payload.description ?? "-"}`,
       ]
-      if (sessions.length > 0) {
-        for (const session of sessions) {
+      if (payload.agentSessions.length > 0) {
+        for (const session of payload.agentSessions) {
           lines.push(
             `agent_session\t${session.agent}\t${session.status}\t${
               session.summary?.replace(/\n/g, " ").slice(0, 200) ?? "-"
@@ -495,56 +455,55 @@ const viewCommand = new Command()
 
     // Table format — detail view
     render("table", {
-      title: `${issue.identifier}: ${issue.title}`,
+      title: `${payload.id}: ${payload.title}`,
       fields: [
-        { label: "State", value: state?.name ?? "-" },
-        { label: "Priority", value: priorityName(issue.priority) },
-        { label: "Assignee", value: assignee?.name ?? "-" },
-        { label: "Delegate", value: delegate?.name ?? "-" },
+        { label: "State", value: payload.state },
+        { label: "Priority", value: payload.priority },
+        { label: "Assignee", value: payload.assignee ?? "-" },
+        { label: "Delegate", value: payload.delegate ?? "-" },
         {
           label: "Labels",
-          value: labels.length ? labels.map((l) => l.name).join(", ") : "-",
+          value: payload.labels.length ? payload.labels.join(", ") : "-",
         },
-        { label: "Project", value: project?.name ?? "-" },
-        { label: "Cycle", value: cycle?.name ?? "-" },
+        { label: "Project", value: payload.project ?? "-" },
+        { label: "Cycle", value: payload.cycle ?? "-" },
         {
           label: "Created",
-          value: `${formatDate(issue.createdAt)} (${
-            relativeTime(issue.createdAt)
+          value: `${formatDate(payload.createdAt)} (${
+            relativeTime(payload.createdAt)
           })`,
         },
         {
           label: "Updated",
-          value: `${formatDate(issue.updatedAt)} (${
-            relativeTime(issue.updatedAt)
+          value: `${formatDate(payload.updatedAt)} (${
+            relativeTime(payload.updatedAt)
           })`,
         },
-        { label: "URL", value: issue.url },
-        { label: "Branch", value: branchName ?? "-" },
+        { label: "URL", value: payload.url },
+        { label: "Branch", value: payload.branchName ?? "-" },
       ],
     })
 
-    if (issue.description) {
+    if (payload.description) {
       console.log(
-        `\nDescription:\n${renderMarkdown(issue.description)}`,
+        `\nDescription:\n${renderMarkdown(payload.description)}`,
       )
     }
 
-    if (comments.length > 0) {
-      console.log(`\nComments (${comments.length}):`)
-      for (const comment of comments) {
-        const user = await comment.user
+    if (payload.comments.length > 0) {
+      console.log(`\nComments (${payload.comments.length}):`)
+      for (const comment of payload.comments) {
         console.log(
-          `\n${user?.name ?? "Unknown"} (${
-            relativeTime(comment.createdAt)
-          }):\n${renderMarkdown(comment.body, { indent: "  " })}`,
+          `\n${comment.author} (${relativeTime(comment.createdAt)}):\n${
+            renderMarkdown(comment.body, { indent: "  " })
+          }`,
         )
       }
     }
 
-    if (sessions.length > 0) {
-      console.log(`\nAgent Sessions (${sessions.length}):`)
-      for (const session of sessions) {
+    if (payload.agentSessions.length > 0) {
+      console.log(`\nAgent Sessions (${payload.agentSessions.length}):`)
+      for (const session of payload.agentSessions) {
         const statusLabel = session.status === "complete"
           ? "complete"
           : session.status === "awaitingInput"
@@ -602,10 +561,9 @@ const createCommand = new Command()
   .option("-p, --project <name:string>", "Project name")
   .option("--parent <id:string>", "Parent issue identifier")
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = requireTeam(options)
+    const { format, client, teamKey } = await getCommandContext(options, {
+      requireTeam: true,
+    })
     const teamId = await resolveTeamId(client, teamKey)
 
     // Description: flag → stdin → undefined
@@ -650,22 +608,20 @@ const createCommand = new Command()
     const issue = await payload.issue
 
     if (!issue) {
-      throw new Error("failed to create issue")
+      throw new CliError("failed to create issue", 1)
     }
 
-    if (format === "json") {
-      renderJson({
-        id: issue.identifier,
-        title: issue.title,
-        url: issue.url,
-      })
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `Created ${issue.identifier}: ${issue.title}\n${issue.url}`,
-    )
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "create",
+        status: "success",
+        url: issue.url,
+        metadata: { title: issue.title },
+      }),
+    })
     if (format === "table") {
       console.error(`  assign: linear issue assign ${issue.identifier}`)
     }
@@ -691,10 +647,8 @@ const updateCommand = new Command()
   .option("-p, --project <name:string>", "Move to project")
   .option("--parent <id:string>", "Set parent issue")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
 
@@ -702,7 +656,9 @@ const updateCommand = new Command()
     const description = options.description ?? (await readStdin())
 
     const assigneeId = options.assignee !== undefined
-      ? (options.assignee === "" ? null : await resolveUser(client, options.assignee))
+      ? (options.assignee === ""
+        ? null
+        : await resolveUser(client, options.assignee))
       : undefined
 
     const stateName = options.state ?? options.status
@@ -765,88 +721,72 @@ const updateCommand = new Command()
       ...(parentId && { parentId }),
     })
 
+    // Re-fetch and display updated issue
     const updated = await client.issue(issue.id)
+    const updatedState = await updated.state
+    const updatedAssignee = await updated.assignee
+    const updatedDelegate = await updated.delegate
 
-    if (format === "json") {
-      renderJson(await buildIssueJson(client, updated))
-      return
-    }
-
-    renderMessage(
+    renderMutationOutput({
       format,
-      `${updated.identifier} updated
-${updated.url}`,
-    )
+      result: buildMutationResult({
+        id: updated.identifier,
+        entity: "issue",
+        action: "update",
+        status: "success",
+        url: updated.url,
+        metadata: {
+          title: updated.title,
+          state: updatedState?.name ?? "-",
+          priority: priorityName(updated.priority),
+          assignee: updatedAssignee?.name ?? null,
+          delegate: updatedDelegate?.name ?? null,
+        },
+      }),
+    })
   })
 
 const deleteCommand = new Command()
   .description("Delete (archive) issue")
   .example("Delete an issue", "linear issue delete POL-5")
-  .example("Delete multiple issues", "linear issue delete POL-1 POL-2 POL-3")
-  .arguments("<ids...:string>")
-  .action(async (options, ...ids: [string, ...Array<string>]) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+  .example("Delete without confirmation", "linear issue delete POL-5 --yes")
+  .arguments("<id:string>")
+  .option("-y, --yes", "Skip confirmation prompt")
+  .action(async (options, id: string) => {
+    const { format, client, noInput } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
-    const issues = await Promise.all(
-      ids.map((id) => resolveIssue(client, id, teamKey)),
-    )
+    const issue = await resolveIssue(client, id, teamKey)
 
-    // Confirm if interactive
-    if (Deno.stdin.isTerminal()) {
-      const buf = new Uint8Array(16)
-      const encoder = new TextEncoder()
-      const label = issues.length === 1
-        ? `${issues[0].identifier} "${issues[0].title}"`
-        : `${issues.length} issues (${issues.map((issue) => issue.identifier).join(", ")})`
-      await Deno.stdout.write(
-        encoder.encode(
-          `Delete ${label}? [y/N] `,
-        ),
-      )
-      const n = await Deno.stdin.read(buf)
-      const answer = new TextDecoder().decode(buf.subarray(0, n ?? 0)).trim()
-      if (answer.toLowerCase() !== "y") {
-        renderMessage(format, "Canceled")
-        return
-      }
-    }
-
-    await Promise.all(issues.map((issue) => client.archiveIssue(issue.id)))
-
-    if (format === "json") {
-      const deletedIssues = await Promise.all(
-        issues.map((issue) => buildIssueJson(client, issue)),
-      )
-      renderJson(deletedIssues.length === 1 ? deletedIssues[0] : deletedIssues)
+    const confirmed = await confirmDangerousAction({
+      prompt: `Delete ${issue.identifier} "${issue.title}"?`,
+      skipConfirm: Boolean((options as { yes?: boolean }).yes) || noInput,
+    })
+    if (!confirmed) {
+      renderMessage(format, "Canceled")
       return
     }
 
-    if (issues.length === 1) {
-      const [issue] = issues
-      renderMessage(
-        format,
-        `${issue.identifier} deleted
-${issue.url}`,
-      )
-      return
-    }
-
-    const deletedSummary = issues.map((issue) => `${issue.identifier}: ${issue.title}`)
-      .join(", ")
-    renderMessage(format, `Deleted ${deletedSummary}`)
+    await client.archiveIssue(issue.id)
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "delete",
+        status: "success",
+        url: issue.url,
+        metadata: { title: issue.title },
+      }),
+    })
   })
 
 const commentListCommand = new Command()
   .description("List comments on issue")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const commentsConn = await issue.comments()
@@ -894,10 +834,8 @@ async function addComment(
   id: string,
   bodyArg?: string,
 ): Promise<void> {
-  const format = getFormat(options)
-  const apiKey = await getAPIKey()
-  const client = createClient(apiKey)
-  const teamKey = (options as GlobalOptions).team
+  const { format, client } = await getCommandContext(options)
+  const teamKey = (options as unknown as { team?: string }).team
 
   const issue = await resolveIssue(client, id, teamKey)
 
@@ -912,11 +850,7 @@ async function addComment(
   }
 
   await client.createComment({ issueId: issue.id, body })
-  renderMessage(
-    format,
-    `Comment added to ${issue.identifier}
-${issue.url}`,
-  )
+  renderMessage(format, `Comment added to ${issue.identifier}`)
 }
 
 const commentCommand = new Command()
@@ -950,142 +884,96 @@ const branchCommand = new Command()
   .example("Get branch name", "linear issue branch POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
+    const payload = { branchName: issue.branchName }
 
     if (format === "json") {
-      renderJson({ branchName: issue.branchName })
+      renderJson(payload)
       return
     }
 
-    console.log(issue.branchName)
+    renderMessage(format, payload.branchName)
   })
 
 const closeCommand = new Command()
   .alias("done").alias("finish").alias("complete").alias("resolve")
   .description("Close issue (set to completed state)")
   .example("Close an issue", "linear issue close POL-5")
-  .example("Close multiple issues", "linear issue close POL-1 POL-2 POL-3")
-  .arguments("<ids...:string>")
-  .action(async (options, ...ids: [string, ...Array<string>]) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+  .arguments("<id:string>")
+  .action(async (options, id: string) => {
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
-    const completedStateByTeam = new Map<string, { id: string; name: string }>()
-    const closedIssues: Array<{ identifier: string; url: string; id: string }> = []
+    const issue = await resolveIssue(client, id, teamKey)
+    const state = await issue.state
+    const team = await state?.team
+    if (!team) throw new CliError("cannot determine team for issue", 1)
 
-    for (const id of ids) {
-      const issue = await resolveIssue(client, id, teamKey)
-      const state = await issue.state
-      const team = await state?.team
-      if (!team) throw new CliError("cannot determine team for issue", 1)
-
-      let completed = completedStateByTeam.get(team.id)
-      if (!completed) {
-        const states = await team.states()
-        const stateNode = states.nodes.find((s) => s.type === "completed")
-        if (!stateNode) {
-          throw new CliError(
-            "no completed state found for team",
-            1,
-            "check team workflow settings in Linear",
-          )
-        }
-        completed = { id: stateNode.id, name: stateNode.name }
-        completedStateByTeam.set(team.id, completed)
-      }
-
-      await client.updateIssue(issue.id, { stateId: completed.id })
-      closedIssues.push({ identifier: issue.identifier, url: issue.url, id: issue.id })
-    }
-
-    if (format === "json") {
-      const updatedIssues = await Promise.all(
-        closedIssues.map((issue) => client.issue(issue.id)),
-      )
-      const payload = await Promise.all(
-        updatedIssues.map((issue) => buildIssueJson(client, issue)),
-      )
-      renderJson(payload.length === 1 ? payload[0] : payload)
-      return
-    }
-
-    for (const issue of closedIssues) {
-      renderMessage(
-        format,
-        `${issue.identifier} closed
-${issue.url}`,
+    const states = await team.states()
+    const completed = states.nodes.find((s) => s.type === "completed")
+    if (!completed) {
+      throw new CliError(
+        "no completed state found for team",
+        1,
+        "check team workflow settings in Linear",
       )
     }
+
+    await client.updateIssue(issue.id, { stateId: completed.id })
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "close",
+        status: "success",
+        url: issue.url,
+        metadata: { state: completed.name },
+      }),
+    })
   })
 
 const reopenCommand = new Command()
   .alias("open")
   .description("Reopen issue (set to unstarted state)")
   .example("Reopen an issue", "linear issue reopen POL-5")
-  .example("Reopen multiple issues", "linear issue reopen POL-1 POL-2")
-  .arguments("<ids...:string>")
-  .action(async (options, ...ids: [string, ...Array<string>]) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+  .arguments("<id:string>")
+  .action(async (options, id: string) => {
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
-    const unstartedStateByTeam = new Map<string, { id: string; name: string }>()
-    const reopenedIssues: Array<{ identifier: string; url: string; id: string }> =
-      []
+    const issue = await resolveIssue(client, id, teamKey)
+    const state = await issue.state
+    const team = await state?.team
+    if (!team) throw new CliError("cannot determine team for issue", 1)
 
-    for (const id of ids) {
-      const issue = await resolveIssue(client, id, teamKey)
-      const state = await issue.state
-      const team = await state?.team
-      if (!team) throw new CliError("cannot determine team for issue", 1)
-
-      let unstarted = unstartedStateByTeam.get(team.id)
-      if (!unstarted) {
-        const states = await team.states()
-        const stateNode = states.nodes.find((s) => s.type === "unstarted")
-        if (!stateNode) {
-          throw new CliError(
-            "no unstarted state found for team",
-            1,
-            "check team workflow settings in Linear",
-          )
-        }
-        unstarted = { id: stateNode.id, name: stateNode.name }
-        unstartedStateByTeam.set(team.id, unstarted)
-      }
-
-      await client.updateIssue(issue.id, { stateId: unstarted.id })
-      reopenedIssues.push({ identifier: issue.identifier, url: issue.url, id: issue.id })
-      if (format === "table") {
-        console.error(`  assign: linear issue assign ${issue.identifier}`)
-      }
+    const states = await team.states()
+    const unstarted = states.nodes.find((s) => s.type === "unstarted")
+    if (!unstarted) {
+      throw new CliError(
+        "no unstarted state found for team",
+        1,
+        "check team workflow settings in Linear",
+      )
     }
 
-    if (format === "json") {
-      const updatedIssues = await Promise.all(
-        reopenedIssues.map((issue) => client.issue(issue.id)),
-      )
-      const payload = await Promise.all(
-        updatedIssues.map((issue) => buildIssueJson(client, issue)),
-      )
-      renderJson(payload.length === 1 ? payload[0] : payload)
-      return
-    }
-
-    for (const issue of reopenedIssues) {
-      renderMessage(
-        format,
-        `${issue.identifier} reopened
-${issue.url}`,
-      )
+    await client.updateIssue(issue.id, { stateId: unstarted.id })
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "reopen",
+        status: "success",
+        url: issue.url,
+        metadata: { state: unstarted.name },
+      }),
+    })
+    if (format === "table") {
+      console.error(`  assign: linear issue assign ${issue.identifier}`)
     }
   })
 
@@ -1093,62 +981,40 @@ const startCommand = new Command()
   .alias("begin")
   .description("Start issue (set to in-progress state)")
   .example("Start working on issue", "linear issue start POL-5")
-  .example("Start multiple issues", "linear issue start POL-1 POL-2")
-  .arguments("<ids...:string>")
-  .action(async (options, ...ids: [string, ...Array<string>]) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+  .arguments("<id:string>")
+  .action(async (options, id: string) => {
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
-    const startedStateByTeam = new Map<string, { id: string; name: string }>()
-    const startedIssues: Array<{ identifier: string; url: string; id: string }> = []
+    const issue = await resolveIssue(client, id, teamKey)
+    const state = await issue.state
+    const team = await state?.team
+    if (!team) throw new CliError("cannot determine team for issue", 1)
 
-    for (const id of ids) {
-      const issue = await resolveIssue(client, id, teamKey)
-      const state = await issue.state
-      const team = await state?.team
-      if (!team) throw new CliError("cannot determine team for issue", 1)
-
-      let started = startedStateByTeam.get(team.id)
-      if (!started) {
-        const states = await team.states()
-        const stateNode = states.nodes.find((s) => s.type === "started")
-        if (!stateNode) {
-          throw new CliError(
-            "no started state found for team",
-            1,
-            "check team workflow settings in Linear",
-          )
-        }
-        started = { id: stateNode.id, name: stateNode.name }
-        startedStateByTeam.set(team.id, started)
-      }
-
-      await client.updateIssue(issue.id, { stateId: started.id })
-      startedIssues.push({ identifier: issue.identifier, url: issue.url, id: issue.id })
-      if (format === "table") {
-        console.error(`  close when done: linear issue close ${issue.identifier}`)
-      }
+    const states = await team.states()
+    const started = states.nodes.find((s) => s.type === "started")
+    if (!started) {
+      throw new CliError(
+        "no started state found for team",
+        1,
+        "check team workflow settings in Linear",
+      )
     }
 
-    if (format === "json") {
-      const updatedIssues = await Promise.all(
-        startedIssues.map((issue) => client.issue(issue.id)),
-      )
-      const payload = await Promise.all(
-        updatedIssues.map((issue) => buildIssueJson(client, issue)),
-      )
-      renderJson(payload.length === 1 ? payload[0] : payload)
-      return
-    }
-
-    for (const issue of startedIssues) {
-      renderMessage(
-        format,
-        `${issue.identifier} started
-${issue.url}`,
-      )
+    await client.updateIssue(issue.id, { stateId: started.id })
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "start",
+        status: "success",
+        url: issue.url,
+        metadata: { state: started.name },
+      }),
+    })
+    if (format === "table") {
+      console.error(`  close when done: linear issue close ${issue.identifier}`)
     }
   })
 
@@ -1156,44 +1022,16 @@ const assignCommand = new Command()
   .description("Assign issue to user (defaults to me)")
   .example("Assign to me", "linear issue assign POL-5")
   .example("Assign to someone", "linear issue assign POL-5 'Jane Smith'")
-  .example(
-    "Assign multiple issues",
-    "linear issue assign POL-1 POL-2 --user 'Jane Smith'",
-  )
-  .arguments("<targets...:string>")
-  .option("-u, --user <user:string>", "Assignee (defaults to me)")
-  .action(async (options, ...targets: [string, ...Array<string>]) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+  .arguments("<id:string> [user:string]")
+  .action(async (options, id: string, user?: string) => {
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
-    const ids = [...targets]
-    let assigneeName = (options as { user?: string }).user
-
-    if (
-      !assigneeName &&
-      ids.length > 1 &&
-      !/^[A-Za-z0-9]+-\d+$/.test(ids[ids.length - 1])
-    ) {
-      assigneeName = ids.pop()
-    }
-
-    if (ids.length === 0) {
-      throw new CliError(
-        "at least one issue id is required",
-        4,
-        "issue assign POL-1 [POL-2 ...] [--user <name>]",
-      )
-    }
-
-    assigneeName = assigneeName ?? "me"
+    const issue = await resolveIssue(client, id, teamKey)
+    const assigneeName = user ?? "me"
     const assigneeId = await resolveUser(client, assigneeName)
 
-    const issues = await Promise.all(
-      ids.map((id) => resolveIssue(client, id, teamKey)),
-    )
-    await Promise.all(issues.map((issue) => client.updateIssue(issue.id, { assigneeId })))
+    await client.updateIssue(issue.id, { assigneeId })
 
     // Resolve display name for confirmation
     let displayName: string
@@ -1202,31 +1040,24 @@ const assignCommand = new Command()
       displayName = viewer.name
     } else {
       // Re-fetch to get the resolved name
-      const updated = await client.issue(issues[0].id)
+      const updated = await client.issue(issue.id)
       const assignee = await updated.assignee
       displayName = assignee?.name ?? assigneeName
     }
 
-    if (format === "json") {
-      const updatedIssues = await Promise.all(
-        issues.map((issue) => client.issue(issue.id)),
-      )
-      const payload = await Promise.all(
-        updatedIssues.map((issue) => buildIssueJson(client, issue)),
-      )
-      renderJson(payload.length === 1 ? payload[0] : payload)
-      return
-    }
-
-    for (const issue of issues) {
-      renderMessage(
-        format,
-        `${issue.identifier} delegated to ${displayName}
-${issue.url}`,
-      )
-      if (format === "table") {
-        console.error(`  start: linear issue start ${issue.identifier}`)
-      }
+    renderMutationOutput({
+      format,
+      result: buildMutationResult({
+        id: issue.identifier,
+        entity: "issue",
+        action: "assign",
+        status: "success",
+        url: issue.url,
+        metadata: { assignee: displayName },
+      }),
+    })
+    if (format === "table") {
+      console.error(`  start: linear issue start ${issue.identifier}`)
     }
   })
 
@@ -1271,10 +1102,8 @@ const watchCommand = new Command()
     default: 0,
   })
   .action(async (options, id: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
-    const teamKey = (options as unknown as GlobalOptions).team
+    const { format, client } = await getCommandContext(options)
+    const teamKey = (options as unknown as { team?: string }).team
 
     const issue = await resolveIssue(client, id, teamKey)
     const interval = (options.interval ?? 15) * 1000
@@ -1294,14 +1123,12 @@ const watchCommand = new Command()
         const appUser = await session.appUser
         const activities = await session.activities()
         const responseActivity = activities.nodes.find(
-          (a) =>
-            a.content.__typename === "AgentActivityResponseContent",
+          (a) => a.content.__typename === "AgentActivityResponseContent",
         )
-        const summary =
-          responseActivity?.content.__typename ===
-              "AgentActivityResponseContent"
-            ? responseActivity.content.body
-            : null
+        const summary = responseActivity?.content.__typename ===
+            "AgentActivityResponseContent"
+          ? responseActivity.content.body
+          : null
 
         const result = {
           issue: issue.identifier,
@@ -1310,7 +1137,9 @@ const watchCommand = new Command()
           summary,
           // externalUrls is typed as Record<string, unknown> in SDK but is actually { url: string }[]
           externalUrl: session.externalLinks?.[0]?.url ??
-            (session.externalUrls as unknown as { url?: string }[] | undefined)?.[0]?.url ?? null,
+            (session.externalUrls as unknown as { url?: string }[] | undefined)
+              ?.[0]?.url ??
+            null,
           elapsed: Math.round((Date.now() - start) / 1000),
         }
 
@@ -1345,13 +1174,14 @@ const watchCommand = new Command()
       // Timeout check
       if (timeout > 0 && Date.now() - start > timeout) {
         const status = session ? session.status : "no session"
+        const timeoutPayload = {
+          issue: issue.identifier,
+          status: "timeout",
+          lastSessionStatus: status,
+          elapsed: Math.round((Date.now() - start) / 1000),
+        }
         if (format === "json") {
-          renderJson({
-            issue: issue.identifier,
-            status: "timeout",
-            lastSessionStatus: status,
-            elapsed: Math.round((Date.now() - start) / 1000),
-          })
+          renderJson(timeoutPayload)
         } else {
           console.error(
             `Timeout: ${issue.identifier} still ${status} after ${
@@ -1377,6 +1207,9 @@ const watchCommand = new Command()
 export const issueCommand = new Command()
   .description("Manage issues")
   .alias("issues")
+  .example("List issues", "linear issue list --team POL")
+  .example("View issue", "linear issue view POL-5")
+  .example("Close issue", "linear issue close POL-5")
   .command("list", listCommand)
   .command("view", viewCommand)
   .command("create", createCommand)
