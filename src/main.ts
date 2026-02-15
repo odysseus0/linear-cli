@@ -125,7 +125,19 @@ const app = new Command()
             return
           }
           console.error(`error: unknown command "${command}"`)
-          console.error(`  try: linear --help`)
+          const suggestions = suggestCommand(
+            command,
+            commandIndex,
+            topLevelNames,
+          )
+          if (suggestions.length) {
+            console.error(`  try: ${suggestions.join(", ")}`)
+          } else {
+            console.error(
+              `  available help topics: ${topLevelNames.join(", ")}`,
+            )
+            console.error(`  try: linear help <topic>`)
+          }
           Deno.exit(4)
         }
         app.showHelp()
@@ -165,6 +177,117 @@ const DIRECT_SUBCOMMANDS = new Set([
 ])
 
 const ISSUE_ID_RE = /^[A-Za-z]+-\d+$/
+
+const GLOBAL_OPTIONS_WITH_VALUE = new Set(["-f", "--format", "-t", "--team"])
+const GLOBAL_FLAG_OPTIONS = new Set(["--json", "--no-input", "--no-color"])
+
+function getCommandPath(args: string[]): string[] {
+  const path: string[] = []
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (!arg) continue
+
+    if (arg === "--") break
+
+    if (arg.startsWith("-")) {
+      const [flag] = arg.split("=", 1)
+      if (GLOBAL_OPTIONS_WITH_VALUE.has(flag) && !arg.includes("=")) {
+        i += 1
+      }
+      if (GLOBAL_FLAG_OPTIONS.has(flag)) {
+        continue
+      }
+      continue
+    }
+
+    path.push(arg)
+    if (path.length >= 2) break
+  }
+
+  return path
+}
+
+function getValidationHint(args: string[]): string {
+  const [parent, sub] = getCommandPath(args)
+  if (!parent) return "linear help"
+  if (parent === "help" && sub) return `linear help ${sub}`
+  if (!sub) return `linear help ${parent}`
+  return `linear help ${parent} ${sub}`
+}
+
+function getValidationMessageHint(
+  message: string,
+  args: string[],
+): string {
+  const contextualHelp = getValidationHint(args)
+
+  const unknownOpt = message.match(/Unknown option "([^"]+)"/)
+  if (unknownOpt) {
+    const opt = unknownOpt[1]
+    return `${contextualHelp} (check supported options; remove ${opt} if not needed)`
+  }
+
+  const missingOptValue = message.match(/Option "([^"]+)" requires value/)
+  if (missingOptValue) {
+    const opt = missingOptValue[1]
+    return `${contextualHelp} (provide a value for ${opt})`
+  }
+
+  const missingRequiredOpts = message.match(/Missing required options?: (.+)$/)
+  if (missingRequiredOpts) {
+    const required = missingRequiredOpts[1]
+    return `${contextualHelp} (required option(s): ${required})`
+  }
+
+  const missingArgValue = message.match(/Argument "([^"]+)" requires value/)
+  if (missingArgValue) {
+    const arg = missingArgValue[1]
+    return `${contextualHelp} (missing value for ${arg})`
+  }
+
+  const missingRequiredArgs = message.match(
+    /Missing required arguments?: (.+)$/,
+  )
+  if (missingRequiredArgs) {
+    const required = missingRequiredArgs[1]
+    return `${contextualHelp} (required argument(s): ${required})`
+  }
+
+  const tooManyArgs = message.match(/Too many arguments/)
+  if (tooManyArgs) {
+    return `${contextualHelp} (too many positional arguments; check argument order)`
+  }
+
+  const unexpectedArg = message.match(/Unexpected argument "([^"]+)"/)
+  if (unexpectedArg) {
+    const arg = unexpectedArg[1]
+    return `${contextualHelp} (unexpected argument: ${arg})`
+  }
+
+  const invalidType = message.match(
+    /Invalid type for (?:argument|option) "([^"]+)"/,
+  )
+  if (invalidType) {
+    const target = invalidType[1]
+    return `${contextualHelp} (invalid type for ${target}; check expected type in help)`
+  }
+
+  const invalidValue = message.match(
+    /Invalid value for (?:argument|option) "([^"]+)"/,
+  )
+  if (invalidValue) {
+    const target = invalidValue[1]
+    return `${contextualHelp} (invalid value for ${target}; check allowed values in help)`
+  }
+
+  const choices = message.match(/Expected one of: (.+)$/)
+  if (choices) {
+    return `${contextualHelp} (allowed values: ${choices[1]})`
+  }
+
+  return contextualHelp
+}
 
 /**
  * Pre-process args to reorder ID-first patterns before Cliffy parsing.
@@ -285,7 +408,9 @@ try {
       }
     } else {
       console.error(`error: ${error.message}`)
-      console.error(`  try: linear --help`)
+      console.error(
+        `  try: ${getValidationMessageHint(error.message, Deno.args)}`,
+      )
     }
     Deno.exit(4)
   }
