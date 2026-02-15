@@ -1,4 +1,6 @@
-import { bold, dim, italic, cyan } from "@std/fmt/colors"
+import { bold, cyan, dim, italic } from "@std/fmt/colors"
+import stringWidth from "string-width"
+import wrapAnsiText from "wrap-ansi"
 
 // ── Public API ──────────────────────────────────────────────────
 
@@ -99,70 +101,20 @@ function formatInline(line: string): string {
 
 // ── ANSI-aware word wrapping ────────────────────────────────────
 
-const ANSI_RE = /\x1b\[[0-9;]*m/g
-
-function visualWidth(s: string): number {
-  return s.replace(ANSI_RE, "").length
-}
-
-/** Split on spaces, keeping ANSI escape codes attached to adjacent text. */
-function splitWords(text: string): string[] {
-  const words: string[] = []
-  let current = ""
-  let inAnsi = false
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (ch === "\x1b") {
-      inAnsi = true
-      current += ch
-    } else if (inAnsi) {
-      current += ch
-      if (ch === "m") inAnsi = false
-    } else if (ch === " ") {
-      if (current) {
-        words.push(current)
-        current = ""
-      }
-    } else {
-      current += ch
-    }
-  }
-  if (current) words.push(current)
-  return words
-}
-
-function wrapOneLine(line: string, indent: string, maxWidth: number): string {
-  const words = splitWords(line)
-  const lines: string[] = []
-  let cur = ""
-  let curWidth = 0
-
-  for (const word of words) {
-    const w = visualWidth(word)
-    const gap = cur ? 1 : 0
-    if (curWidth + gap + w > maxWidth && cur) {
-      lines.push(cur)
-      cur = word
-      curWidth = w
-    } else {
-      cur = cur ? cur + " " + word : word
-      curWidth += gap + w
-    }
-  }
-  if (cur) lines.push(cur)
-  return lines.join("\n" + indent)
-}
-
 /** Indent every line and word-wrap lines that exceed width. */
 function wrapAnsi(text: string, indent: string, width: number): string {
-  const maxContent = width - indent.length
+  const maxContent = width - stringWidth(indent)
   if (maxContent < 20) return text
 
   return text.split("\n").map((line) => {
-    if (visualWidth(line) <= maxContent) {
-      return indent + line
-    }
-    return indent + wrapOneLine(line, indent, maxContent)
+    const wrapped = wrapAnsiText(line, maxContent, {
+      hard: false,
+      wordWrap: true,
+      trim: false,
+    })
+    return wrapped
+      .split("\n")
+      .map((segment) => indent + segment)
+      .join("\n")
   }).join("\n")
 }

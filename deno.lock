@@ -10,6 +10,7 @@
     "jsr:@cliffy/prompt@^1.0.0-rc.8": "1.0.0-rc.8",
     "jsr:@cliffy/table@1.0.0-rc.8": "1.0.0-rc.8",
     "jsr:@cliffy/table@^1.0.0-rc.8": "1.0.0-rc.8",
+    "jsr:@std/assert@*": "1.0.18",
     "jsr:@std/assert@~1.0.6": "1.0.18",
     "jsr:@std/collections@^1.1.3": "1.1.5",
     "jsr:@std/encoding@~1.0.5": "1.0.10",
@@ -25,7 +26,9 @@
     "jsr:@std/toml@*": "1.0.11",
     "npm:@linear/sdk@75": "75.0.0",
     "npm:marked-terminal@*": "7.3.0_marked@17.0.1",
-    "npm:marked@*": "17.0.1"
+    "npm:marked@*": "17.0.1",
+    "npm:string-width@8.1.1": "8.1.1",
+    "npm:wrap-ansi@9.0.2": "9.0.2"
   },
   "jsr": {
     "@cliffy/ansi@1.0.0-rc.8": {
@@ -65,7 +68,7 @@
         "jsr:@cliffy/ansi@1.0.0-rc.8",
         "jsr:@cliffy/internal",
         "jsr:@cliffy/keycode",
-        "jsr:@std/assert",
+        "jsr:@std/assert@~1.0.6",
         "jsr:@std/fmt@~1.0.2",
         "jsr:@std/io",
         "jsr:@std/path@~1.0.6",
@@ -79,7 +82,10 @@
       ]
     },
     "@std/assert@1.0.18": {
-      "integrity": "270245e9c2c13b446286de475131dc688ca9abcd94fc5db41d43a219b34d1c78"
+      "integrity": "270245e9c2c13b446286de475131dc688ca9abcd94fc5db41d43a219b34d1c78",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
     },
     "@std/collections@1.1.5": {
       "integrity": "c37cc6bbbbf90fec3e782535a46c9c8a3210f19118c61add71fcea86b0ffd491"
@@ -159,13 +165,16 @@
         "color-convert"
       ]
     },
+    "ansi-styles@6.2.3": {
+      "integrity": "sha512-4Dj6M28JB+oAH8kFkTLUo+a2jwOFkuqb3yucU0CANcRRUbxS0cP0nZYCGjcc3BNXwRIsUVmDGgzawme7zvJHvg=="
+    },
     "any-promise@1.3.0": {
       "integrity": "sha512-7UvmKalWRt1wgjL1RrGxoSJW/0QZFIegpeGvZG9kjp8vrRu55XTHbwnqq2GpXm9uLbcuhxm3IqX9OB4MZR1b2A=="
     },
     "chalk@4.1.2": {
       "integrity": "sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA==",
       "dependencies": [
-        "ansi-styles",
+        "ansi-styles@4.3.0",
         "supports-color"
       ]
     },
@@ -190,7 +199,7 @@
     "cli-table3@0.6.5": {
       "integrity": "sha512-+W/5efTR7y5HRD7gACw9yQjqMVvEMLBHmboM/kPWam+H+Hmyrgjh6YncVKK122YZkXrLudzTuAukUw9FnMf7IQ==",
       "dependencies": [
-        "string-width"
+        "string-width@4.2.3"
       ],
       "optionalDependencies": [
         "@colors/colors"
@@ -199,9 +208,9 @@
     "cliui@7.0.4": {
       "integrity": "sha512-OcRE68cOsVMXp1Yvonl/fzkQOyjLSu/8bhPDfQt0e0/Eb283TKP20Fs2MqoPsr9SwA595rRCA+QMzYc9nBP+JQ==",
       "dependencies": [
-        "string-width",
-        "strip-ansi",
-        "wrap-ansi"
+        "string-width@4.2.3",
+        "strip-ansi@6.0.1",
+        "wrap-ansi@7.0.0"
       ]
     },
     "color-convert@2.0.1": {
@@ -212,6 +221,9 @@
     },
     "color-name@1.1.4": {
       "integrity": "sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA=="
+    },
+    "emoji-regex@10.6.0": {
+      "integrity": "sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A=="
     },
     "emoji-regex@8.0.0": {
       "integrity": "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="
@@ -227,6 +239,9 @@
     },
     "get-caller-file@2.0.5": {
       "integrity": "sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg=="
+    },
+    "get-east-asian-width@1.4.0": {
+      "integrity": "sha512-QZjmEOC+IT1uk6Rx0sX22V6uHWVwbdbxf1faPqJ1QhLdGgsRGCZoyaQBm/piRdJy/D2um6hM1UP7ZEeQ4EkP+Q=="
     },
     "graphql@16.12.0": {
       "integrity": "sha512-DKKrynuQRne0PNpEbzuEdHlYOMksHSUI8Zc9Unei5gTsMNA2/vMpoMz/yKba50pejK56qj98qM0SjYxAKi13gQ=="
@@ -301,15 +316,36 @@
     "string-width@4.2.3": {
       "integrity": "sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==",
       "dependencies": [
-        "emoji-regex",
+        "emoji-regex@8.0.0",
         "is-fullwidth-code-point",
-        "strip-ansi"
+        "strip-ansi@6.0.1"
+      ]
+    },
+    "string-width@7.2.0": {
+      "integrity": "sha512-tsaTIkKW9b4N+AEj+SVA+WhJzV7/zMhcSu78mLKWSk7cXMOSHsBKFWUs0fWwq8QyK3MgJBQRX6Gbi4kYbdvGkQ==",
+      "dependencies": [
+        "emoji-regex@10.6.0",
+        "get-east-asian-width",
+        "strip-ansi@7.1.2"
+      ]
+    },
+    "string-width@8.1.1": {
+      "integrity": "sha512-KpqHIdDL9KwYk22wEOg/VIqYbrnLeSApsKT/bSj6Ez7pn3CftUiLAv2Lccpq1ALcpLV9UX1Ppn92npZWu2w/aw==",
+      "dependencies": [
+        "get-east-asian-width",
+        "strip-ansi@7.1.2"
       ]
     },
     "strip-ansi@6.0.1": {
       "integrity": "sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==",
       "dependencies": [
         "ansi-regex@5.0.1"
+      ]
+    },
+    "strip-ansi@7.1.2": {
+      "integrity": "sha512-gmBGslpoQJtgnMAvOVqGZpEz9dyoKTCzy2nfz/n8aIFhN/jCE/rCmcxabB6jOOHV+0WNnylOxaxBQPSvcWklhA==",
+      "dependencies": [
+        "ansi-regex@6.2.2"
       ]
     },
     "supports-color@7.2.0": {
@@ -343,9 +379,17 @@
     "wrap-ansi@7.0.0": {
       "integrity": "sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q==",
       "dependencies": [
-        "ansi-styles",
-        "string-width",
-        "strip-ansi"
+        "ansi-styles@4.3.0",
+        "string-width@4.2.3",
+        "strip-ansi@6.0.1"
+      ]
+    },
+    "wrap-ansi@9.0.2": {
+      "integrity": "sha512-42AtmgqjV+X1VpdOfyTGOYRi0/zsoLqtXQckTmqTeybT+BDIbM/Guxo7x3pE2vtpr1ok6xRqM9OpBe+Jyoqyww==",
+      "dependencies": [
+        "ansi-styles@6.2.3",
+        "string-width@7.2.0",
+        "strip-ansi@7.1.2"
       ]
     },
     "y18n@5.0.8": {
@@ -361,7 +405,7 @@
         "escalade",
         "get-caller-file",
         "require-directory",
-        "string-width",
+        "string-width@4.2.3",
         "y18n",
         "yargs-parser"
       ]
@@ -373,11 +417,14 @@
       "jsr:@cliffy/command@^1.0.0-rc.8",
       "jsr:@cliffy/prompt@^1.0.0-rc.8",
       "jsr:@cliffy/table@^1.0.0-rc.8",
+      "jsr:@std/assert@*",
       "jsr:@std/fmt@*",
       "jsr:@std/fs@*",
       "jsr:@std/path@*",
       "jsr:@std/toml@*",
-      "npm:@linear/sdk@75"
+      "npm:@linear/sdk@75",
+      "npm:string-width@8.1.1",
+      "npm:wrap-ansi@9.0.2"
     ]
   }
 }
