@@ -1,7 +1,8 @@
 import { Command } from "@cliffy/command"
 import { CliError } from "../errors.ts"
-import { render } from "../output/formatter.ts"
+import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
+import { resolveTeam } from "../resolve.ts"
 import { formatDate, relativeTime } from "../time.ts"
 import { getCommandContext } from "./_shared/context.ts"
 
@@ -13,17 +14,7 @@ const listCommand = new Command()
       requireTeam: true,
     })
 
-    const teams = await client.teams()
-    const team = teams.nodes.find(
-      (t) => t.key.toLowerCase() === teamKey.toLowerCase(),
-    )
-    if (!team) {
-      throw new CliError(
-        `team not found: "${teamKey}"`,
-        3,
-        "check team key with: linear team list",
-      )
-    }
+    const team = await resolveTeam(client, teamKey)
 
     const cycles = await team.cycles()
     const items = cycles.nodes.sort(
@@ -63,17 +54,7 @@ const viewCommand = new Command()
       requireTeam: true,
     })
 
-    const teams = await client.teams()
-    const team = teams.nodes.find(
-      (t) => t.key.toLowerCase() === teamKey.toLowerCase(),
-    )
-    if (!team) {
-      throw new CliError(
-        `team not found: "${teamKey}"`,
-        3,
-        "check team key with: linear team list",
-      )
-    }
+    const team = await resolveTeam(client, teamKey)
 
     const cycles = await team.cycles()
     const cycle = cycles.nodes.find((c) => c.number === number)
@@ -130,7 +111,7 @@ const viewCommand = new Command()
         `ends\t${payload.endsAt ? formatDate(payload.endsAt) : "-"}`,
         `progress\t${payload.progressSummary}`,
       ]
-      console.log(lines.join("\n"))
+      renderMessage(format, lines.join("\n"))
       return
     }
 
@@ -151,14 +132,12 @@ const viewCommand = new Command()
     })
 
     if (payload.issues.length > 0) {
-      console.log("\nIssues:")
-      for (const r of payload.issues) {
-        console.log(
-          `  ${r.identifier}  ${r.state}  ${r.assignee}  ${r.title}    ${
-            relativeTime(r.updatedAt)
-          }`,
-        )
-      }
+      const issueLines = payload.issues.map((r) =>
+        `  ${r.identifier}  ${r.state}  ${r.assignee}  ${r.title}    ${
+          relativeTime(r.updatedAt)
+        }`
+      )
+      renderMessage(format, `\nIssues:\n${issueLines.join("\n")}`)
     }
   })
 
