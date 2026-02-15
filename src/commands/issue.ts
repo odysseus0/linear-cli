@@ -749,17 +749,23 @@ const updateCommand = new Command()
 const deleteCommand = new Command()
   .description("Delete (archive) issue")
   .example("Delete an issue", "linear issue delete POL-5")
+  .example("Delete multiple issues", "linear issue delete POL-1 POL-2 POL-3")
+  .arguments("<ids...:string>")
   .example("Delete without confirmation", "linear issue delete POL-5 --yes")
-  .arguments("<id:string>")
   .option("-y, --yes", "Skip confirmation prompt")
-  .action(async (options, id: string) => {
+  .action(async (options, ...ids: [string, ...Array<string>]) => {
     const { format, client, noInput } = await getCommandContext(options)
-    const teamKey = (options as unknown as { team?: string }).team
+    const teamKey = (options as { team?: string }).team
 
-    const issue = await resolveIssue(client, id, teamKey)
+    const issues = await Promise.all(
+      ids.map((id) => resolveIssue(client, id, teamKey)),
+    )
 
+    const label = issues.length === 1
+      ? `${issues[0].identifier} "${issues[0].title}"`
+      : `${issues.length} issues (${issues.map((issue) => issue.identifier).join(", ")})`
     const confirmed = await confirmDangerousAction({
-      prompt: `Delete ${issue.identifier} "${issue.title}"?`,
+      prompt: `Delete ${label}?`,
       skipConfirm: Boolean((options as { yes?: boolean }).yes) || noInput,
     })
     if (!confirmed) {
@@ -767,18 +773,32 @@ const deleteCommand = new Command()
       return
     }
 
-    await client.archiveIssue(issue.id)
-    renderMutationOutput({
-      format,
-      result: buildMutationResult({
-        id: issue.identifier,
-        entity: "issue",
-        action: "delete",
-        status: "success",
-        url: issue.url,
-        metadata: { title: issue.title },
-      }),
-    })
+    await Promise.all(issues.map((issue) => client.archiveIssue(issue.id)))
+
+    const payload = issues.map((issue) => ({
+      id: issue.identifier,
+      status: "success",
+      url: issue.url,
+      metadata: { title: issue.title },
+    }))
+    if (format === "json") {
+      renderJson(payload.length === 1 ? payload[0] : payload)
+      return
+    }
+
+    for (const issue of issues) {
+      renderMutationOutput({
+        format,
+        result: buildMutationResult({
+          id: issue.identifier,
+          entity: "issue",
+          action: "delete",
+          status: "success",
+          url: issue.url,
+          metadata: { title: issue.title },
+        }),
+      })
+    }
   })
 
 const commentListCommand = new Command()
@@ -902,78 +922,146 @@ const closeCommand = new Command()
   .alias("done").alias("finish").alias("complete").alias("resolve")
   .description("Close issue (set to completed state)")
   .example("Close an issue", "linear issue close POL-5")
-  .arguments("<id:string>")
-  .action(async (options, id: string) => {
+  .example("Close multiple issues", "linear issue close POL-1 POL-2 POL-3")
+  .arguments("<ids...:string>")
+  .action(async (options, ...ids: [string, ...Array<string>]) => {
     const { format, client } = await getCommandContext(options)
-    const teamKey = (options as unknown as { team?: string }).team
+    const teamKey = (options as { team?: string }).team
 
-    const issue = await resolveIssue(client, id, teamKey)
-    const state = await issue.state
-    const team = await state?.team
-    if (!team) throw new CliError("cannot determine team for issue", 1)
+    const completedStateByTeam = new Map<string, { id: string; name: string }>()
+    const closedIssues: Array<{
+      identifier: string
+      url: string
+      state: string
+    }> = []
 
-    const states = await team.states()
-    const completed = states.nodes.find((s) => s.type === "completed")
-    if (!completed) {
-      throw new CliError(
-        "no completed state found for team",
-        1,
-        "check team workflow settings in Linear",
-      )
+    for (const id of ids) {
+      const issue = await resolveIssue(client, id, teamKey)
+      const state = await issue.state
+      const team = await state?.team
+      if (!team) throw new CliError("cannot determine team for issue", 1)
+
+      let completed = completedStateByTeam.get(team.id)
+      if (!completed) {
+        const states = await team.states()
+        const stateNode = states.nodes.find((s) => s.type === "completed")
+        if (!stateNode) {
+          throw new CliError(
+            "no completed state found for team",
+            1,
+            "check team workflow settings in Linear",
+          )
+        }
+        completed = { id: stateNode.id, name: stateNode.name }
+        completedStateByTeam.set(team.id, completed)
+      }
+
+      await client.updateIssue(issue.id, { stateId: completed.id })
+      closedIssues.push({
+        identifier: issue.identifier,
+        url: issue.url,
+        state: completed.name,
+      })
     }
 
-    await client.updateIssue(issue.id, { stateId: completed.id })
-    renderMutationOutput({
-      format,
-      result: buildMutationResult({
+    if (format === "json") {
+      const payload = closedIssues.map((issue) => ({
         id: issue.identifier,
-        entity: "issue",
-        action: "close",
         status: "success",
         url: issue.url,
-        metadata: { state: completed.name },
-      }),
-    })
+        metadata: { state: issue.state },
+      }))
+      renderJson(payload.length === 1 ? payload[0] : payload)
+      return
+    }
+
+    for (const issue of closedIssues) {
+      renderMutationOutput({
+        format,
+        result: buildMutationResult({
+          id: issue.identifier,
+          entity: "issue",
+          action: "close",
+          status: "success",
+          url: issue.url,
+          metadata: { state: issue.state },
+        }),
+      })
+    }
   })
 
 const reopenCommand = new Command()
   .alias("open")
   .description("Reopen issue (set to unstarted state)")
   .example("Reopen an issue", "linear issue reopen POL-5")
-  .arguments("<id:string>")
-  .action(async (options, id: string) => {
+  .example("Reopen multiple issues", "linear issue reopen POL-1 POL-2")
+  .arguments("<ids...:string>")
+  .action(async (options, ...ids: [string, ...Array<string>]) => {
     const { format, client } = await getCommandContext(options)
-    const teamKey = (options as unknown as { team?: string }).team
+    const teamKey = (options as { team?: string }).team
 
-    const issue = await resolveIssue(client, id, teamKey)
-    const state = await issue.state
-    const team = await state?.team
-    if (!team) throw new CliError("cannot determine team for issue", 1)
+    const unstartedStateByTeam = new Map<string, { id: string; name: string }>()
+    const reopenedIssues: Array<{
+      identifier: string
+      url: string
+      state: string
+    }> = []
 
-    const states = await team.states()
-    const unstarted = states.nodes.find((s) => s.type === "unstarted")
-    if (!unstarted) {
-      throw new CliError(
-        "no unstarted state found for team",
-        1,
-        "check team workflow settings in Linear",
-      )
+    for (const id of ids) {
+      const issue = await resolveIssue(client, id, teamKey)
+      const state = await issue.state
+      const team = await state?.team
+      if (!team) throw new CliError("cannot determine team for issue", 1)
+
+      let unstarted = unstartedStateByTeam.get(team.id)
+      if (!unstarted) {
+        const states = await team.states()
+        const stateNode = states.nodes.find((s) => s.type === "unstarted")
+        if (!stateNode) {
+          throw new CliError(
+            "no unstarted state found for team",
+            1,
+            "check team workflow settings in Linear",
+          )
+        }
+        unstarted = { id: stateNode.id, name: stateNode.name }
+        unstartedStateByTeam.set(team.id, unstarted)
+      }
+
+      await client.updateIssue(issue.id, { stateId: unstarted.id })
+      reopenedIssues.push({
+        identifier: issue.identifier,
+        url: issue.url,
+        state: unstarted.name,
+      })
+      if (format === "table") {
+        console.error(`  assign: linear issue assign ${issue.identifier}`)
+      }
     }
 
-    await client.updateIssue(issue.id, { stateId: unstarted.id })
-    renderMutationOutput({
-      format,
-      result: buildMutationResult({
+    if (format === "json") {
+      const payload = reopenedIssues.map((issue) => ({
         id: issue.identifier,
-        entity: "issue",
-        action: "reopen",
         status: "success",
         url: issue.url,
-        metadata: { state: unstarted.name },
-      }),
-    })
-    if (format === "table") {
-      console.error(`  assign: linear issue assign ${issue.identifier}`)
+        metadata: { state: issue.state },
+      }))
+      renderJson(payload.length === 1 ? payload[0] : payload)
+      return
+    }
+
+    for (const issue of reopenedIssues) {
+      renderMutationOutput({
+        format,
+        result: buildMutationResult({
+          id: issue.identifier,
+          entity: "issue",
+          action: "reopen",
+          status: "success",
+          url: issue.url,
+          metadata: { state: issue.state },
+        }),
+      })
     }
   })
 
@@ -981,40 +1069,74 @@ const startCommand = new Command()
   .alias("begin")
   .description("Start issue (set to in-progress state)")
   .example("Start working on issue", "linear issue start POL-5")
-  .arguments("<id:string>")
-  .action(async (options, id: string) => {
+  .example("Start multiple issues", "linear issue start POL-1 POL-2")
+  .arguments("<ids...:string>")
+  .action(async (options, ...ids: [string, ...Array<string>]) => {
     const { format, client } = await getCommandContext(options)
-    const teamKey = (options as unknown as { team?: string }).team
+    const teamKey = (options as { team?: string }).team
 
-    const issue = await resolveIssue(client, id, teamKey)
-    const state = await issue.state
-    const team = await state?.team
-    if (!team) throw new CliError("cannot determine team for issue", 1)
+    const startedStateByTeam = new Map<string, { id: string; name: string }>()
+    const startedIssues: Array<{
+      identifier: string
+      url: string
+      state: string
+    }> = []
 
-    const states = await team.states()
-    const started = states.nodes.find((s) => s.type === "started")
-    if (!started) {
-      throw new CliError(
-        "no started state found for team",
-        1,
-        "check team workflow settings in Linear",
-      )
+    for (const id of ids) {
+      const issue = await resolveIssue(client, id, teamKey)
+      const state = await issue.state
+      const team = await state?.team
+      if (!team) throw new CliError("cannot determine team for issue", 1)
+
+      let started = startedStateByTeam.get(team.id)
+      if (!started) {
+        const states = await team.states()
+        const stateNode = states.nodes.find((s) => s.type === "started")
+        if (!stateNode) {
+          throw new CliError(
+            "no started state found for team",
+            1,
+            "check team workflow settings in Linear",
+          )
+        }
+        started = { id: stateNode.id, name: stateNode.name }
+        startedStateByTeam.set(team.id, started)
+      }
+
+      await client.updateIssue(issue.id, { stateId: started.id })
+      startedIssues.push({
+        identifier: issue.identifier,
+        url: issue.url,
+        state: started.name,
+      })
+      if (format === "table") {
+        console.error(`  close when done: linear issue close ${issue.identifier}`)
+      }
     }
 
-    await client.updateIssue(issue.id, { stateId: started.id })
-    renderMutationOutput({
-      format,
-      result: buildMutationResult({
+    if (format === "json") {
+      const payload = startedIssues.map((issue) => ({
         id: issue.identifier,
-        entity: "issue",
-        action: "start",
         status: "success",
         url: issue.url,
-        metadata: { state: started.name },
-      }),
-    })
-    if (format === "table") {
-      console.error(`  close when done: linear issue close ${issue.identifier}`)
+        metadata: { state: issue.state },
+      }))
+      renderJson(payload.length === 1 ? payload[0] : payload)
+      return
+    }
+
+    for (const issue of startedIssues) {
+      renderMutationOutput({
+        format,
+        result: buildMutationResult({
+          id: issue.identifier,
+          entity: "issue",
+          action: "start",
+          status: "success",
+          url: issue.url,
+          metadata: { state: issue.state },
+        }),
+      })
     }
   })
 
@@ -1022,16 +1144,42 @@ const assignCommand = new Command()
   .description("Assign issue to user (defaults to me)")
   .example("Assign to me", "linear issue assign POL-5")
   .example("Assign to someone", "linear issue assign POL-5 'Jane Smith'")
-  .arguments("<id:string> [user:string]")
-  .action(async (options, id: string, user?: string) => {
+  .example(
+    "Assign multiple issues",
+    "linear issue assign POL-1 POL-2 --user 'Jane Smith'",
+  )
+  .arguments("<targets...:string>")
+  .option("-u, --user <user:string>", "Assignee (defaults to me)")
+  .action(async (options, ...targets: [string, ...Array<string>]) => {
     const { format, client } = await getCommandContext(options)
-    const teamKey = (options as unknown as { team?: string }).team
+    const teamKey = (options as { team?: string }).team
 
-    const issue = await resolveIssue(client, id, teamKey)
-    const assigneeName = user ?? "me"
+    const ids = [...targets]
+    let assigneeName = (options as { user?: string }).user
+
+    if (
+      !assigneeName &&
+      ids.length > 1 &&
+      !/^[A-Za-z0-9]+-\d+$/.test(ids[ids.length - 1])
+    ) {
+      assigneeName = ids.pop()
+    }
+
+    if (ids.length === 0) {
+      throw new CliError(
+        "at least one issue id is required",
+        4,
+        "issue assign POL-1 [POL-2 ...] [--user <name>]",
+      )
+    }
+
+    assigneeName = assigneeName ?? "me"
     const assigneeId = await resolveUser(client, assigneeName)
 
-    await client.updateIssue(issue.id, { assigneeId })
+    const issues = await Promise.all(
+      ids.map((id) => resolveIssue(client, id, teamKey)),
+    )
+    await Promise.all(issues.map((issue) => client.updateIssue(issue.id, { assigneeId })))
 
     // Resolve display name for confirmation
     let displayName: string
@@ -1040,24 +1188,37 @@ const assignCommand = new Command()
       displayName = viewer.name
     } else {
       // Re-fetch to get the resolved name
-      const updated = await client.issue(issue.id)
+      const updated = await client.issue(issues[0].id)
       const assignee = await updated.assignee
       displayName = assignee?.name ?? assigneeName
     }
 
-    renderMutationOutput({
-      format,
-      result: buildMutationResult({
+    if (format === "json") {
+      const payload = issues.map((issue) => ({
         id: issue.identifier,
-        entity: "issue",
-        action: "assign",
         status: "success",
         url: issue.url,
         metadata: { assignee: displayName },
-      }),
-    })
-    if (format === "table") {
-      console.error(`  start: linear issue start ${issue.identifier}`)
+      }))
+      renderJson(payload.length === 1 ? payload[0] : payload)
+      return
+    }
+
+    for (const issue of issues) {
+      renderMutationOutput({
+        format,
+        result: buildMutationResult({
+          id: issue.identifier,
+          entity: "issue",
+          action: "assign",
+          status: "success",
+          url: issue.url,
+          metadata: { assignee: displayName },
+        }),
+      })
+      if (format === "table") {
+        console.error(`  start: linear issue start ${issue.identifier}`)
+      }
     }
   })
 
