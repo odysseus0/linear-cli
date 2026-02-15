@@ -7,6 +7,30 @@ import { renderJson } from "../output/json.ts"
 import { readStdin, resolveInitiative, resolveUser } from "../resolve.ts"
 import { formatDate, relativeTime } from "../time.ts"
 
+async function buildInitiativeJson(
+  // deno-lint-ignore no-explicit-any
+  initiative: any,
+) {
+  const owner = await initiative.owner
+  const creator = await initiative.creator
+  const projects = await initiative.projects()
+
+  return {
+    id: initiative.id,
+    name: initiative.name,
+    description: initiative.description ?? null,
+    status: initiative.status,
+    owner: owner?.name ?? null,
+    creator: creator?.name ?? null,
+    targetDate: initiative.targetDate ?? null,
+    health: initiative.health ?? null,
+    url: initiative.url,
+    createdAt: initiative.createdAt,
+    updatedAt: initiative.updatedAt,
+    projects: projects.nodes.map((p) => p.name),
+  }
+}
+
 const listCommand = new Command()
   .description("List initiatives")
   .example("List all initiatives", "linear initiative list")
@@ -77,20 +101,7 @@ const viewCommand = new Command()
     const projects = await initiative.projects()
 
     if (format === "json") {
-      renderJson({
-        id: initiative.id,
-        name: initiative.name,
-        description: initiative.description ?? null,
-        status: initiative.status,
-        owner: owner?.name ?? null,
-        creator: creator?.name ?? null,
-        targetDate: initiative.targetDate ?? null,
-        health: initiative.health ?? null,
-        url: initiative.url,
-        createdAt: initiative.createdAt,
-        updatedAt: initiative.updatedAt,
-        projects: projects.nodes.map((p) => p.name),
-      })
+      renderJson(await buildInitiativeJson(initiative))
       return
     }
 
@@ -137,7 +148,10 @@ const viewCommand = new Command()
 
 const createCommand = new Command()
   .description("Create initiative")
-  .example("Create an initiative", "linear initiative create --name 'Q1 Goals' --status active")
+  .example(
+    "Create an initiative",
+    "linear initiative create --name 'Q1 Goals' --status active",
+  )
   .option("--name <name:string>", "Initiative name", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("--owner <name:string>", "Initiative owner")
@@ -200,7 +214,10 @@ const createCommand = new Command()
 
 const updateCommand = new Command()
   .description("Update initiative")
-  .example("Update status", "linear initiative update 'Q1 Goals' --status completed")
+  .example(
+    "Update status",
+    "linear initiative update 'Q1 Goals' --status completed",
+  )
   .arguments("<name:string>")
   .option("--name <name:string>", "New name")
   .option("-d, --description <desc:string>", "New description")
@@ -244,31 +261,18 @@ const updateCommand = new Command()
 
     await client.updateInitiative(initiative.id, input)
 
-    // Re-fetch and display updated initiative
     const updated = await client.initiative(initiative.id)
-    const updatedOwner = await updated.owner
 
     if (format === "json") {
-      renderJson({
-        id: updated.id,
-        name: updated.name,
-        status: updated.status,
-        owner: updatedOwner?.name ?? null,
-        targetDate: updated.targetDate ?? null,
-        url: updated.url,
-      })
+      renderJson(await buildInitiativeJson(updated))
       return
     }
 
-    render(format === "table" ? "table" : "compact", {
-      title: updated.name,
-      fields: [
-        { label: "Status", value: updated.status },
-        { label: "Owner", value: updatedOwner?.name ?? "-" },
-        { label: "Target", value: updated.targetDate ?? "-" },
-        { label: "URL", value: updated.url },
-      ],
-    })
+    renderMessage(
+      format,
+      `${updated.name} updated
+${updated.url}`,
+    )
   })
 
 // --- Porcelain: state transitions ---
@@ -277,26 +281,50 @@ const startCommand = new Command()
   .description("Start initiative (set status to active)")
   .example("Start an initiative", "linear initiative start 'Q1 Goals'")
   .arguments("<name:string>")
-  .action(async (_options, name: string) => {
+  .action(async (options, name: string) => {
+    const format = getFormat(options)
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const initiative = await resolveInitiative(client, name)
     // deno-lint-ignore no-explicit-any
     await client.updateInitiative(initiative.id, { status: "Active" as any })
-    console.log(`${initiative.name} started`)
+    const updated = await client.initiative(initiative.id)
+
+    if (format === "json") {
+      renderJson(await buildInitiativeJson(updated))
+      return
+    }
+
+    renderMessage(
+      format,
+      `${updated.name} started
+${updated.url}`,
+    )
   })
 
 const completeInitiativeCommand = new Command()
   .description("Complete initiative (set status to completed)")
   .example("Complete an initiative", "linear initiative complete 'Q1 Goals'")
   .arguments("<name:string>")
-  .action(async (_options, name: string) => {
+  .action(async (options, name: string) => {
+    const format = getFormat(options)
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const initiative = await resolveInitiative(client, name)
     // deno-lint-ignore no-explicit-any
     await client.updateInitiative(initiative.id, { status: "Completed" as any })
-    console.log(`${initiative.name} completed`)
+    const updated = await client.initiative(initiative.id)
+
+    if (format === "json") {
+      renderJson(await buildInitiativeJson(updated))
+      return
+    }
+
+    renderMessage(
+      format,
+      `${updated.name} completed
+${updated.url}`,
+    )
   })
 
 export const initiativeCommand = new Command()

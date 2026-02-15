@@ -50,6 +50,80 @@ function priorityName(priority: number): string {
   }
 }
 
+async function buildIssueJson(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  // deno-lint-ignore no-explicit-any
+  issue: any,
+) {
+  const state = await issue.state
+  const assignee = await issue.assignee
+  const delegate = await issue.delegate
+  const labelsConn = await issue.labels()
+  const labels = labelsConn.nodes
+  const project = await issue.project
+  const cycle = await issue.cycle
+  const commentsConn = await issue.comments()
+  const comments = commentsConn.nodes
+  const branchName = await issue.branchName
+
+  const allSessions = await client.agentSessions()
+  const sessions = []
+  for (const session of allSessions.nodes) {
+    const sessionIssue = await session.issue
+    if (sessionIssue?.id === issue.id) {
+      const appUser = await session.appUser
+      const activities = await session.activities()
+      const responseActivity = activities.nodes.find(
+        (a) =>
+          // deno-lint-ignore no-explicit-any
+          (a.content as any)?.__typename === "AgentActivityResponseContent",
+      )
+      sessions.push({
+        agent: appUser?.name ?? "Unknown",
+        status: session.status,
+        createdAt: session.createdAt,
+        // deno-lint-ignore no-explicit-any
+        summary: (responseActivity?.content as any)?.body ?? null,
+        externalUrl: session.externalLinks?.[0]?.url ??
+          // deno-lint-ignore no-explicit-any
+          (session.externalUrls as any)?.[0]?.url ?? null,
+        activities: null,
+      })
+    }
+  }
+
+  const commentData = await Promise.all(
+    comments.map(async (c) => {
+      const user = await c.user
+      return {
+        author: user?.name ?? "Unknown",
+        body: c.body,
+        createdAt: c.createdAt,
+      }
+    }),
+  )
+
+  return {
+    id: issue.identifier,
+    title: issue.title,
+    state: state?.name ?? "-",
+    priority: priorityName(issue.priority),
+    assignee: assignee?.name ?? null,
+    delegate: delegate?.name ?? null,
+    labels: labels.map((l) => l.name),
+    project: project?.name ?? null,
+    cycle: cycle?.name ?? null,
+    createdAt: issue.createdAt,
+    updatedAt: issue.updatedAt,
+    url: issue.url,
+    branchName: branchName ?? null,
+    description: issue.description ?? null,
+    comments: commentData,
+    agentSessions: sessions,
+  }
+}
+
 const DEFAULT_ACTIVE_STATES = ["triage", "backlog", "unstarted", "started"]
 
 const listCommand = new Command()
@@ -127,7 +201,10 @@ const listCommand = new Command()
     }
 
     // Normalize human-friendly sort values
-    const sortMap: Record<string, string> = { updated: "updatedAt", created: "createdAt" }
+    const sortMap: Record<string, string> = {
+      updated: "updatedAt",
+      created: "createdAt",
+    }
     const sortField = sortMap[options.sort] ?? options.sort
 
     // Order
@@ -136,7 +213,9 @@ const listCommand = new Command()
       : PaginationOrderBy.UpdatedAt
 
     // V16: progress indication for slow list fetch
-    if (Deno.stderr.isTerminal()) Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
+    if (Deno.stderr.isTerminal()) {
+      Deno.stderr.writeSync(new TextEncoder().encode("Fetching...\r"))
+    }
 
     const issues = await client.issues({
       filter,
@@ -445,8 +524,14 @@ const viewCommand = new Command()
 
 const createCommand = new Command()
   .description("Create issue")
-  .example("Create a bug", "linear issue create --team POL --title 'Login crash' --priority urgent --label bug")
-  .example("Create and assign to me", "linear issue create --team POL --title 'Fix tests' --assignee me")
+  .example(
+    "Create a bug",
+    "linear issue create --team POL --title 'Login crash' --priority urgent --label bug",
+  )
+  .example(
+    "Create and assign to me",
+    "linear issue create --team POL --title 'Fix tests' --assignee me",
+  )
   .option("--title <title:string>", "Issue title", { required: true })
   .option("-d, --description <desc:string>", "Description")
   .option("-a, --assignee <name:string>", "Assignee name or 'me'")
@@ -641,38 +726,18 @@ const updateCommand = new Command()
 
     await client.updateIssue(issue.id, input)
 
-    // Re-fetch and display updated issue
     const updated = await client.issue(issue.id)
-    const updatedState = await updated.state
-    const updatedAssignee = await updated.assignee
-    const updatedDelegate = await updated.delegate
 
     if (format === "json") {
-      renderJson({
-        id: updated.identifier,
-        title: updated.title,
-        state: updatedState?.name ?? "-",
-        assignee: updatedAssignee?.name ?? null,
-        delegate: updatedDelegate?.name ?? null,
-        url: updated.url,
-      })
+      renderJson(await buildIssueJson(client, updated))
       return
     }
 
-    const fields = [
-      { label: "State", value: updatedState?.name ?? "-" },
-      { label: "Priority", value: priorityName(updated.priority) },
-      { label: "Assignee", value: updatedAssignee?.name ?? "-" },
-    ]
-    if (updatedDelegate) {
-      fields.push({ label: "Delegate", value: updatedDelegate.name })
-    }
-    fields.push({ label: "URL", value: updated.url })
-
-    render(format === "table" ? "table" : "compact", {
-      title: `${updated.identifier}: ${updated.title}`,
-      fields,
-    })
+    renderMessage(
+      format,
+      `${updated.identifier} updated
+${updated.url}`,
+    )
   })
 
 const deleteCommand = new Command()
@@ -705,9 +770,16 @@ const deleteCommand = new Command()
     }
 
     await client.archiveIssue(issue.id)
+
+    if (format === "json") {
+      renderJson(await buildIssueJson(client, issue))
+      return
+    }
+
     renderMessage(
       format,
-      `Deleted ${issue.identifier}: ${issue.title}`,
+      `${issue.identifier} deleted
+${issue.url}`,
     )
   })
 
@@ -784,7 +856,11 @@ async function addComment(
   }
 
   await client.createComment({ issueId: issue.id, body })
-  renderMessage(format, `Comment added to ${issue.identifier}`)
+  renderMessage(
+    format,
+    `Comment added to ${issue.identifier}
+${issue.url}`,
+  )
 }
 
 const commentCommand = new Command()
@@ -838,6 +914,7 @@ const closeCommand = new Command()
   .example("Close an issue", "linear issue close POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
+    const format = getFormat(options)
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const teamKey = (options as unknown as GlobalOptions).team
@@ -858,7 +935,18 @@ const closeCommand = new Command()
     }
 
     await client.updateIssue(issue.id, { stateId: completed.id })
-    console.log(`${issue.identifier} closed (${completed.name})`)
+    const updated = await client.issue(issue.id)
+
+    if (format === "json") {
+      renderJson(await buildIssueJson(client, updated))
+      return
+    }
+
+    renderMessage(
+      format,
+      `${issue.identifier} closed
+${updated.url}`,
+    )
   })
 
 const reopenCommand = new Command()
@@ -866,6 +954,7 @@ const reopenCommand = new Command()
   .example("Reopen an issue", "linear issue reopen POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
+    const format = getFormat(options)
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const teamKey = (options as unknown as GlobalOptions).team
@@ -886,10 +975,18 @@ const reopenCommand = new Command()
     }
 
     await client.updateIssue(issue.id, { stateId: unstarted.id })
-    console.log(`${issue.identifier} reopened (${unstarted.name})`)
-    if (getFormat(options) === "table") {
-      console.error(`  assign: linear issue assign ${issue.identifier}`)
+    const updated = await client.issue(issue.id)
+
+    if (format === "json") {
+      renderJson(await buildIssueJson(client, updated))
+      return
     }
+
+    renderMessage(
+      format,
+      `${issue.identifier} reopened
+${updated.url}`,
+    )
   })
 
 const startCommand = new Command()
@@ -897,6 +994,7 @@ const startCommand = new Command()
   .example("Start working on issue", "linear issue start POL-5")
   .arguments("<id:string>")
   .action(async (options, id: string) => {
+    const format = getFormat(options)
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const teamKey = (options as unknown as GlobalOptions).team
@@ -917,10 +1015,18 @@ const startCommand = new Command()
     }
 
     await client.updateIssue(issue.id, { stateId: started.id })
-    console.log(`${issue.identifier} started (${started.name})`)
-    if (getFormat(options) === "table") {
-      console.error(`  close when done: linear issue close ${issue.identifier}`)
+    const updated = await client.issue(issue.id)
+
+    if (format === "json") {
+      renderJson(await buildIssueJson(client, updated))
+      return
     }
+
+    renderMessage(
+      format,
+      `${issue.identifier} started
+${updated.url}`,
+    )
   })
 
 const assignCommand = new Command()
@@ -929,6 +1035,7 @@ const assignCommand = new Command()
   .example("Assign to someone", "linear issue assign POL-5 'Jane Smith'")
   .arguments("<id:string> [user:string]")
   .action(async (options, id: string, user?: string) => {
+    const format = getFormat(options)
     const apiKey = await getAPIKey()
     const client = createClient(apiKey)
     const teamKey = (options as unknown as GlobalOptions).team
@@ -951,10 +1058,17 @@ const assignCommand = new Command()
       displayName = assignee?.name ?? assigneeName
     }
 
-    console.log(`${issue.identifier} assigned to ${displayName}`)
-    if (getFormat(options) === "table") {
-      console.error(`  start: linear issue start ${issue.identifier}`)
+    if (format === "json") {
+      const updated = await client.issue(issue.id)
+      renderJson(await buildIssueJson(client, updated))
+      return
     }
+
+    renderMessage(
+      format,
+      `${issue.identifier} delegated to ${displayName}
+${issue.url}`,
+    )
   })
 
 const TERMINAL_SESSION_STATES = new Set(["complete", "error", "awaitingInput"])
@@ -1023,8 +1137,7 @@ const watchCommand = new Command()
         const activities = await session.activities()
         const responseActivity = activities.nodes.find(
           // deno-lint-ignore no-explicit-any
-          (a: any) =>
-            a.content?.__typename === "AgentActivityResponseContent",
+          (a: any) => a.content?.__typename === "AgentActivityResponseContent",
         )
 
         const result = {
@@ -1043,7 +1156,9 @@ const watchCommand = new Command()
           renderJson(result)
         } else if (format === "compact") {
           console.log(
-            `${result.issue}\t${result.agent}\t${result.status}\t${result.elapsed}s\t${result.summary?.replace(/\n/g, " ").slice(0, 200) ?? "-"}\t${result.externalUrl ?? "-"}`,
+            `${result.issue}\t${result.agent}\t${result.status}\t${result.elapsed}s\t${
+              result.summary?.replace(/\n/g, " ").slice(0, 200) ?? "-"
+            }\t${result.externalUrl ?? "-"}`,
           )
         } else {
           console.log(
@@ -1077,7 +1192,9 @@ const watchCommand = new Command()
           })
         } else {
           console.error(
-            `Timeout: ${issue.identifier} still ${status} after ${Math.round((Date.now() - start) / 1000)}s`,
+            `Timeout: ${issue.identifier} still ${status} after ${
+              Math.round((Date.now() - start) / 1000)
+            }s`,
           )
         }
         Deno.exit(124)
