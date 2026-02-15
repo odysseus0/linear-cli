@@ -168,14 +168,14 @@ const listCommand = new Command()
         }
         cycleId = future[0].id
       } else {
-        const num = parseInt(options.cycle)
-        if (isNaN(num)) {
+        if (!/^\d+$/.test(options.cycle)) {
           throw new CliError(
             `invalid cycle "${options.cycle}"`,
             4,
             "--cycle current, --cycle next, or --cycle <number>",
           )
         }
+        const num = Number(options.cycle)
         const match = cycles.nodes.find((c: { number: number }) =>
           c.number === num
         )

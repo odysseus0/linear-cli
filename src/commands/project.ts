@@ -646,11 +646,7 @@ const startCommand = new Command()
   .arguments("<name:string>")
   .action(async (options, name: string) => {
     const { format, client } = await getCommandContext(options)
-    const project = await resolveProjectByName(
-      client,
-      name,
-      (p) => p.state?.toLowerCase() !== "started",
-    )
+    const project = await resolveProjectByName(client, name)
     const statusId = await resolveProjectStatusId(client, "started")
     await client.updateProject(project.id, { statusId })
     renderMutationOutput({
@@ -677,11 +673,7 @@ const pauseCommand = new Command()
   .arguments("<name:string>")
   .action(async (options, name: string) => {
     const { format, client } = await getCommandContext(options)
-    const project = await resolveProjectByName(
-      client,
-      name,
-      (p) => p.state?.toLowerCase() !== "paused",
-    )
+    const project = await resolveProjectByName(client, name)
     const statusId = await resolveProjectStatusId(client, "paused")
     await client.updateProject(project.id, { statusId })
     renderMutationOutput({
@@ -703,11 +695,7 @@ const completeCommand = new Command()
   .arguments("<name:string>")
   .action(async (options, name: string) => {
     const { format, client } = await getCommandContext(options)
-    const project = await resolveProjectByName(
-      client,
-      name,
-      (p) => p.state?.toLowerCase() !== "completed",
-    )
+    const project = await resolveProjectByName(client, name)
     const statusId = await resolveProjectStatusId(client, "completed")
     await client.updateProject(project.id, { statusId })
     renderMutationOutput({
@@ -729,11 +717,7 @@ const cancelCommand = new Command()
   .arguments("<name:string>")
   .action(async (options, name: string) => {
     const { format, client } = await getCommandContext(options)
-    const project = await resolveProjectByName(
-      client,
-      name,
-      (p) => p.state?.toLowerCase() !== "canceled",
-    )
+    const project = await resolveProjectByName(client, name)
     const statusId = await resolveProjectStatusId(client, "canceled")
     await client.updateProject(project.id, { statusId })
     renderMutationOutput({
