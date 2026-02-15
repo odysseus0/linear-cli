@@ -1,15 +1,13 @@
 import { Command } from "@cliffy/command"
 import { Input } from "@cliffy/prompt"
+import type { LinearClient } from "@linear/sdk"
 import { createClient } from "../client.ts"
-import {
-  getAPIKey,
-  removeCredentials,
-  saveCredentials,
-} from "../auth.ts"
+import { removeCredentials, saveCredentials } from "../auth.ts"
 import { CliError } from "../errors.ts"
 import { getFormat } from "../types.ts"
 import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
+import { getCommandContext } from "./_shared/context.ts"
 
 interface ViewerInfo {
   name: string
@@ -19,8 +17,9 @@ interface ViewerInfo {
   workspace: string
 }
 
-async function fetchViewerInfo(apiKey: string): Promise<ViewerInfo> {
-  const client = createClient(apiKey)
+async function fetchViewerInfoFromClient(
+  client: LinearClient,
+): Promise<ViewerInfo> {
   try {
     const viewer = await client.viewer
     const organization = await viewer.organization
@@ -39,6 +38,11 @@ async function fetchViewerInfo(apiKey: string): Promise<ViewerInfo> {
       "check your API key at linear.app/settings/api",
     )
   }
+}
+
+async function fetchViewerInfo(apiKey: string): Promise<ViewerInfo> {
+  const client = createClient(apiKey)
+  return await fetchViewerInfoFromClient(client)
 }
 
 export const authCommand = new Command()
@@ -68,9 +72,8 @@ export const authCommand = new Command()
     new Command()
       .description("Remove stored credentials")
       .action(async (options) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const viewer = await fetchViewerInfo(apiKey)
+        const { format, client } = await getCommandContext(options)
+        const viewer = await fetchViewerInfoFromClient(client)
         await removeCredentials(viewer.workspace)
         renderMessage(format, `Logged out of workspace ${viewer.workspace}`)
       }),
@@ -80,9 +83,8 @@ export const authCommand = new Command()
     new Command()
       .description("Show authentication status")
       .action(async (options) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const viewer = await fetchViewerInfo(apiKey)
+        const { format, client } = await getCommandContext(options)
+        const viewer = await fetchViewerInfoFromClient(client)
         renderMessage(
           format,
           `Authenticated as ${viewer.name} (${viewer.email})\nWorkspace: ${viewer.workspace}`,
@@ -94,9 +96,8 @@ export const authCommand = new Command()
     new Command()
       .description("Show current user")
       .action(async (options) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const payload = await fetchViewerInfo(apiKey)
+        const { format, client } = await getCommandContext(options)
+        const payload = await fetchViewerInfoFromClient(client)
         if (format === "json") {
           renderJson(payload)
           return

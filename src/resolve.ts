@@ -1,4 +1,11 @@
-import type { Document, Initiative, Issue, LinearClient } from "@linear/sdk"
+import type {
+  Document,
+  Initiative,
+  Issue,
+  LinearClient,
+  Team,
+  User,
+} from "@linear/sdk"
 import { CliError } from "./errors.ts"
 
 // ---------------------------------------------------------------------------
@@ -113,11 +120,11 @@ export function requireTeam(options: unknown): string {
 // Entity resolvers — thin wrappers around resolve()
 // ---------------------------------------------------------------------------
 
-/** Resolve team key to team ID. */
-export async function resolveTeamId(
+/** Resolve team key to Team entity. */
+export async function resolveTeam(
   client: LinearClient,
   teamKey: string,
-): Promise<string> {
+): Promise<Team> {
   const teams = await client.teams()
   return resolve({
     items: teams.nodes,
@@ -125,17 +132,24 @@ export async function resolveTeamId(
     key: (t) => t.key,
     entity: "team",
     display: (t) => t.key,
-  }).id
+  })
 }
 
-/** Resolve user name to ID. Supports "me" for current viewer. */
-export async function resolveUser(
+/** Resolve team key to team ID. */
+export async function resolveTeamId(
+  client: LinearClient,
+  teamKey: string,
+): Promise<string> {
+  return (await resolveTeam(client, teamKey)).id
+}
+
+/** Resolve user name to User entity. Supports "me" for current viewer. */
+export async function resolveUserEntity(
   client: LinearClient,
   name: string,
-): Promise<string> {
+): Promise<User> {
   if (name === "me") {
-    const viewer = await client.viewer
-    return viewer.id
+    return await client.viewer
   }
 
   const users = await client.users()
@@ -146,7 +160,15 @@ export async function resolveUser(
     altKeys: (u) => [u.email ?? ""],
     entity: "user",
     display: (u) => `${u.name} (${u.email})`,
-  }).id
+  })
+}
+
+/** Resolve user name to ID. Supports "me" for current viewer. */
+export async function resolveUser(
+  client: LinearClient,
+  name: string,
+): Promise<string> {
+  return (await resolveUserEntity(client, name)).id
 }
 
 /** Resolve label name to ID within a team. */
