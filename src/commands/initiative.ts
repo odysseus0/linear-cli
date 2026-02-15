@@ -1,10 +1,7 @@
 import { Command } from "@cliffy/command"
 import { InitiativeStatus } from "@linear/sdk"
-import { createClient } from "../client.ts"
 import { CliError } from "../errors.ts"
-import { getAPIKey } from "../auth.ts"
-import { getFormat } from "../types.ts"
-import { render } from "../output/formatter.ts"
+import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
 import { readStdin, resolveInitiative, resolveUser } from "../resolve.ts"
 import { formatDate, relativeTime } from "../time.ts"
@@ -13,6 +10,37 @@ import {
   buildMutationResult,
   renderMutationOutput,
 } from "./_shared/mutation_output.ts"
+
+const INITIATIVE_STATUS_MAP: Record<string, InitiativeStatus> = {
+  planned: InitiativeStatus.Planned,
+  active: InitiativeStatus.Active,
+  completed: InitiativeStatus.Completed,
+}
+
+function parseInitiativeStatus(input: string): InitiativeStatus {
+  const status = INITIATIVE_STATUS_MAP[input.toLowerCase()]
+  if (!status) {
+    throw new CliError(
+      `invalid status "${input}"`,
+      4,
+      "use: planned, active, completed",
+    )
+  }
+  return status
+}
+
+function initiativeStatusLabel(status: InitiativeStatus): string {
+  switch (status) {
+    case InitiativeStatus.Planned:
+      return "planned"
+    case InitiativeStatus.Active:
+      return "active"
+    case InitiativeStatus.Completed:
+      return "completed"
+    default:
+      return String(status).toLowerCase()
+  }
+}
 
 // Linear API uses "status" for initiatives (vs "state" for issues)
 const listCommand = new Command()
@@ -26,15 +54,15 @@ const listCommand = new Command()
   )
   .option("--owner <name:string>", "Filter by owner name (substring match)")
   .action(async (options) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const initiatives = await client.initiatives()
     let items = initiatives.nodes
 
     if (options.status) {
-      const target = options.status.toLowerCase()
+      const target = initiativeStatusLabel(
+        parseInitiativeStatus(options.status),
+      )
       items = items.filter(
         (i) => i.status.toLowerCase() === target,
       )
@@ -82,9 +110,7 @@ const viewCommand = new Command()
   .example("View an initiative", "linear initiative view 'Q1 Goals'")
   .arguments("<name:string>")
   .action(async (options, name: string) => {
-    const format = getFormat(options)
-    const apiKey = await getAPIKey()
-    const client = createClient(apiKey)
+    const { format, client } = await getCommandContext(options)
 
     const initiative = await resolveInitiative(client, name)
 
@@ -121,7 +147,7 @@ const viewCommand = new Command()
         `projects\t${payload.projects.join(", ") || "-"}`,
         `url\t${payload.url}`,
       ]
-      console.log(lines.join("\n"))
+      renderMessage(format, lines.join("\n"))
       return
     }
 
@@ -148,7 +174,7 @@ const viewCommand = new Command()
     })
 
     if (payload.description) {
-      console.log(`\n${payload.description}`)
+      renderMessage(format, `\n${payload.description}`)
     }
   })
 
@@ -174,19 +200,7 @@ const createCommand = new Command()
     // Resolve status enum
     let status: InitiativeStatus | undefined
     if (options.status) {
-      const statusMap: Record<string, InitiativeStatus> = {
-        planned: InitiativeStatus.Planned,
-        active: InitiativeStatus.Active,
-        completed: InitiativeStatus.Completed,
-      }
-      status = statusMap[options.status.toLowerCase()]
-      if (!status) {
-        throw new CliError(
-          `invalid status "${options.status}"`,
-          4,
-          "use: planned, active, completed",
-        )
-      }
+      status = parseInitiativeStatus(options.status)
     }
 
     const ownerId = options.owner
@@ -241,19 +255,7 @@ const updateCommand = new Command()
 
     let status: InitiativeStatus | undefined
     if (options.status) {
-      const statusMap: Record<string, InitiativeStatus> = {
-        planned: InitiativeStatus.Planned,
-        active: InitiativeStatus.Active,
-        completed: InitiativeStatus.Completed,
-      }
-      status = statusMap[options.status.toLowerCase()]
-      if (!status) {
-        throw new CliError(
-          `invalid status "${options.status}"`,
-          4,
-          "use: planned, active, completed",
-        )
-      }
+      status = parseInitiativeStatus(options.status)
     }
 
     const ownerId = options.owner

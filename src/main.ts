@@ -11,10 +11,8 @@ import { userCommand } from "./commands/user.ts"
 import { documentCommand } from "./commands/document.ts"
 import { initiativeCommand } from "./commands/initiative.ts"
 import { inboxCommand } from "./commands/inbox.ts"
+import { getCommandContext } from "./commands/_shared/context.ts"
 import { buildIndex, suggestCommand } from "./suggest.ts"
-import { createClient } from "./client.ts"
-import { getAPIKey } from "./auth.ts"
-import { getFormat } from "./types.ts"
 import { render } from "./output/formatter.ts"
 import { renderJson } from "./output/json.ts"
 import denoConfig from "../deno.json" with { type: "json" }
@@ -76,9 +74,7 @@ const app = new Command()
         "Show current authenticated user (shorthand for user view me)",
       )
       .action(async (options) => {
-        const format = getFormat(options)
-        const apiKey = await getAPIKey()
-        const client = createClient(apiKey)
+        const { format, client } = await getCommandContext(options)
 
         const user = await client.viewer
 

@@ -1,8 +1,8 @@
 import { Command } from "@cliffy/command"
-import { CliError } from "../errors.ts"
 import { getCommandContext } from "./_shared/context.ts"
 import { render } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
+import { resolveUserEntity } from "../resolve.ts"
 
 export const userCommand = new Command()
   .description("Manage users")
@@ -53,55 +53,7 @@ export const userCommand = new Command()
       .arguments("<name:string>")
       .action(async (options, name: string) => {
         const { format, client } = await getCommandContext(options)
-
-        let user
-
-        if (name === "me") {
-          user = await client.viewer
-        } else {
-          const usersConnection = await client.users()
-          const all = usersConnection.nodes
-
-          // Exact name match (case-insensitive)
-          let found = all.find(
-            (u) => u.name.toLowerCase() === name.toLowerCase(),
-          )
-          // Exact email match
-          if (!found) {
-            found = all.find(
-              (u) => u.email?.toLowerCase() === name.toLowerCase(),
-            )
-          }
-          // Substring match
-          if (!found) {
-            const partial = all.filter(
-              (u) => u.name.toLowerCase().includes(name.toLowerCase()),
-            )
-            if (partial.length === 1) {
-              found = partial[0]
-            } else if (partial.length > 1) {
-              const candidates = partial
-                .map((u) => `${u.name} (${u.email})`)
-                .join(", ")
-              throw new CliError(
-                `ambiguous user "${name}"`,
-                4,
-                `matches: ${candidates}`,
-              )
-            }
-          }
-          if (!found) {
-            const available = all
-              .map((u) => `${u.name} (${u.email})`)
-              .join(", ")
-            throw new CliError(
-              `user not found: "${name}"`,
-              3,
-              `available: ${available}`,
-            )
-          }
-          user = found
-        }
+        const user = await resolveUserEntity(client, name)
 
         const details = {
           name: user.name,
