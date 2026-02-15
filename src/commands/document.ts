@@ -87,9 +87,9 @@ const viewCommand = new Command()
         `creator\t${payload.creator ?? "-"}`,
         `url\t${payload.url}`,
       ]
-      console.log(lines.join("\n"))
+      renderMessage(format, lines.join("\n"))
       if (payload.content) {
-        console.log(`\n${payload.content}`)
+        renderMessage(format, `\n${payload.content}`)
       }
       return
     }
@@ -116,7 +116,7 @@ const viewCommand = new Command()
     })
 
     if (payload.content) {
-      console.log(`\n${payload.content}`)
+      renderMessage(format, `\n${payload.content}`)
     }
   })
 

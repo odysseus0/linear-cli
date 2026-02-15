@@ -1,9 +1,8 @@
 import { Command } from "@cliffy/command"
 import type { LinearClient } from "@linear/sdk"
-import { CliError } from "../errors.ts"
 import { render, renderMessage } from "../output/formatter.ts"
 import { renderJson } from "../output/json.ts"
-import { requireTeam } from "../resolve.ts"
+import { requireTeam, resolveTeam } from "../resolve.ts"
 import { getCommandContext } from "./_shared/context.ts"
 
 interface TeamSummary {
@@ -23,15 +22,25 @@ async function loadTeams(client: LinearClient): Promise<TeamSummary[]> {
   }))
 }
 
-async function findTeam(client: LinearClient, key: string) {
-  const teamsConnection = await client.teams()
-  const teams = teamsConnection.nodes
-  const target = teams.find((t) => t.key.toLowerCase() === key.toLowerCase())
-  if (!target) {
-    const available = teams.map((t) => t.key).join(", ")
-    throw new CliError(`team not found: "${key}"`, 3, `available: ${available}`)
+export async function fetchTeamOverviewIssues(
+  client: LinearClient,
+  teamKey: string,
+) {
+  let issues = await client.issues({
+    filter: {
+      team: { key: { eq: teamKey } },
+      state: {
+        type: { in: ["backlog", "unstarted", "started", "completed"] },
+      },
+    },
+    first: 100,
+  })
+  const allIssues = [...issues.nodes]
+  while (issues.pageInfo.hasNextPage) {
+    issues = await issues.fetchNext()
+    allIssues.push(...issues.nodes)
   }
-  return target
+  return allIssues
 }
 
 export const teamCommand = new Command()
@@ -71,7 +80,7 @@ export const teamCommand = new Command()
       .arguments("<key:string>")
       .action(async (options, key: string) => {
         const { format, client } = await getCommandContext(options)
-        const target = await findTeam(client, key)
+        const target = await resolveTeam(client, key)
         const membersConnection = await target.members()
         const members = membersConnection.nodes
         const payload = {
@@ -109,7 +118,7 @@ export const teamCommand = new Command()
       .arguments("<key:string>")
       .action(async (options, key: string) => {
         const { format, client } = await getCommandContext(options)
-        const target = await findTeam(client, key)
+        const target = await resolveTeam(client, key)
         const membersConnection = await target.members()
         const payload = membersConnection.nodes.map((member) => ({
           name: member.name,
@@ -142,7 +151,7 @@ export const teamCommand = new Command()
         const { format, client } = await getCommandContext(options)
         // Positional arg takes precedence over --team flag
         const teamKey = key ?? requireTeam(options)
-        const target = await findTeam(client, teamKey)
+        const target = await resolveTeam(client, teamKey)
 
         // Progress indication for slow overview fetch
         if (Deno.stderr.isTerminal()) {
@@ -150,21 +159,13 @@ export const teamCommand = new Command()
         }
 
         // Fetch all active issues for the team
-        const issues = await client.issues({
-          filter: {
-            team: { key: { eq: teamKey } },
-            state: {
-              type: { in: ["backlog", "unstarted", "started", "completed"] },
-            },
-          },
-          first: 200,
-        })
+        const allIssues = await fetchTeamOverviewIssues(client, teamKey)
 
         // Build assignee × state matrix
         const stateTypes = ["Backlog", "Todo", "In Progress", "Done"]
         const matrix: Record<string, Record<string, number>> = {}
 
-        for (const issue of issues.nodes) {
+        for (const issue of allIssues) {
           const assignee = await issue.assignee
           const state = await issue.state
           const assigneeName = assignee?.name ?? "Unassigned"
@@ -204,7 +205,7 @@ export const teamCommand = new Command()
           return a.localeCompare(b)
         })
 
-        const total = issues.nodes.length
+        const total = allIssues.length
         const inProgress = Object.values(matrix).reduce(
           (sum, row) => sum + (row["In Progress"] ?? 0),
           0,
@@ -257,7 +258,7 @@ export const teamCommand = new Command()
       .arguments("<key:string>")
       .action(async (options, key: string) => {
         const { format, client } = await getCommandContext(options)
-        const target = await findTeam(client, key)
+        const target = await resolveTeam(client, key)
         const statesConn = await target.states()
         const payload = statesConn.nodes.map((s) => ({
           name: s.name,
@@ -290,7 +291,7 @@ export const teamCommand = new Command()
       .arguments("<key:string>")
       .action(async (options, key: string) => {
         const { format, client } = await getCommandContext(options)
-        const target = await findTeam(client, key)
+        const target = await resolveTeam(client, key)
         const labelsConn = await target.labels()
         const payload = labelsConn.nodes.map((l) => ({
           name: l.name,
